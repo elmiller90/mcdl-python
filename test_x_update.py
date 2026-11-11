@@ -1,41 +1,100 @@
 import numpy as np
 
-from x_update import x_objective, solve_x
+from multiscale_convolution import MultiscaleConvolutionOperator
+from x_update import x_objective
+
+
+def make_dictionary(M, K):
+    x = np.arange(M, dtype=np.float64)
+    D = np.zeros((M, K))
+
+    centers = [24.0, 46.0]
+    widths = [4.0, 7.0]
+
+    for k in range(K):
+        D[:, k] = np.exp(
+            -0.5 * ((x - centers[k]) / widths[k]) ** 2
+        )
+        D[:, k] /= np.linalg.norm(D[:, k])
+
+    return D
 
 
 def gradient_test():
+    rng = np.random.default_rng(40)
 
-    rng = np.random.default_rng(2)
-
-    K = 1
-    J = 4
-    N = 12
+    # Problem dimensions
+    M = 71
+    N = 201
+    K = 2
     T = 4
+    center = 36
 
-    shape = (1, N, K * J, T)
+    scales = [
+        (1, 1),
+        (1, 2),
+        (2, 3),
+        (3, 2),
+        (2, 1),
+    ]
 
-    X = rng.normal(size=shape)
-    S = rng.normal(size=shape)
-    Y = rng.normal(size=shape)
-    U = rng.normal(size=shape)
+    J = len(scales)
+
+    # Fixed multiscale dictionary
+    D = make_dictionary(M, K)
+
+    operator = MultiscaleConvolutionOperator(
+        D=D,
+        scales=scales,
+        center=center,
+        N=N,
+        normalize=True,
+    )
+
+    # Canonical layout:
+    #
+    # X, Y, U : (N, K, J, T)
+    # S       : (N, T)
+    shape = (N, K, J, T)
+
+    X = rng.normal(
+        scale=0.1,
+        size=shape,
+    )
+
+    Y = rng.normal(
+        scale=0.1,
+        size=shape,
+    )
+
+    U = rng.normal(
+        scale=0.1,
+        size=shape,
+    )
+
+    S = rng.normal(
+        scale=0.1,
+        size=(N, T),
+    )
 
     rho = 1.3
     lambda2 = 0.7
     tau = 1e-2
 
+    # Analytical objective and gradient
     f, grad = x_objective(
         X.ravel(),
         shape,
         S,
         Y,
         U,
-        K,
-        J,
+        operator,
         rho,
         lambda2,
         tau,
     )
 
+    # Random unit direction
     V = rng.normal(size=shape)
     V /= np.linalg.norm(V)
 
@@ -44,55 +103,59 @@ def gradient_test():
         V.ravel(),
     )
 
-    print("X-objective gradient test")
-    print("-------------------------")
+    print()
+    print("Composite X-objective gradient test")
+    print("-----------------------------------")
+    print(f"X shape = {X.shape}")
+    print(f"S shape = {S.shape}")
     print(f"f = {f:.12e}")
     print(f"analytic = {analytic:.12e}")
+
     print()
     print(
         "eps          finite-difference       "
         "relative error"
     )
 
-    for eps in [
+    eps_values = [
         1e-2,
         1e-3,
         1e-4,
         1e-5,
         1e-6,
-    ]:
+    ]
+
+    for eps in eps_values:
+        Xp = X + eps * V
+        Xm = X - eps * V
 
         fp, _ = x_objective(
-            (X + eps * V).ravel(),
+            Xp.ravel(),
             shape,
             S,
             Y,
             U,
-            K,
-            J,
+            operator,
             rho,
             lambda2,
             tau,
         )
 
         fm, _ = x_objective(
-            (X - eps * V).ravel(),
+            Xm.ravel(),
             shape,
             S,
             Y,
             U,
-            K,
-            J,
+            operator,
             rho,
             lambda2,
             tau,
         )
 
-        fd = (fp - fm) / (2 * eps)
+        fd = (fp - fm) / (2.0 * eps)
 
-        error = abs(
-            fd - analytic
-        ) / max(
+        error = abs(fd - analytic) / max(
             1.0,
             abs(fd),
             abs(analytic),
@@ -104,151 +167,6 @@ def gradient_test():
             f"{error:.3e}"
         )
 
-def optimization_test():
-
-    rng = np.random.default_rng(3)
-
-    K = 1
-    J = 5
-    N = 25
-    T = 6
-    shape = (1, N, K * J, T)
-
-    # Desired data: mostly coherent trajectory,
-    # with one deliberately displaced observation.
-    S = np.zeros(shape)
-
-    j = 2
-    n0 = 6
-
-    for t in range(T):
-        n = n0 + t
-
-        if t == 3:
-            n += 3
-
-        S[0, n, j, t] = 1.0
-
-    # Start optimization from observations.
-    X0 = S.copy()
-
-    # For this isolated experiment, remove the influence
-    # of the ADMM target by setting rho very small.
-    Y = np.zeros_like(X0)
-    U = np.zeros_like(X0)
-
-    X, result = solve_x(
-        X0,
-        S,
-        Y,
-        U,
-        K,
-        J,
-        rho=1e-6,
-        lambda2=1.0,
-        tau=1e-2,
-        maxiter=200,
-    )
-
-    print()
-    print("L-BFGS optimization test")
-    print("------------------------")
-    print("success:", result.success)
-    print("message:", result.message)
-    print("iterations:", result.nit)
-    print("function evaluations:", result.nfev)
-    print("initial objective:",
-          x_objective(
-              X0.ravel(),
-              shape, S, Y, U,
-              K, J,
-              1e-6, 1.0, 1e-2
-          )[0])
-    print("final objective:", result.fun)
-
-    print()
-    print("Frame  observed   recovered")
-
-    for t in range(T):
-        observed = np.argmax(S[0, :, j, t])
-        recovered = np.argmax(X[0, :, j, t])
-
-        print(
-            f"{t:5d}"
-            f"{observed:10d}"
-            f"{recovered:12d}"
-        )
-
-def lambda_sweep_test():
-
-    K = 1
-    J = 5
-    N = 25
-    T = 6
-    shape = (1, N, K * J, T)
-
-    S = np.zeros(shape)
-
-    j = 2
-    n0 = 6
-
-    for t in range(T):
-        n = n0 + t
-
-        if t == 3:
-            n += 3
-
-        S[0, n, j, t] = 1.0
-
-    X0 = S.copy()
-    Y = np.zeros_like(X0)
-    U = np.zeros_like(X0)
-
-    lambda_values = [
-        0.0,
-        0.01,
-        0.03,
-        0.1,
-        0.3,
-        1.0,
-        3.0,
-    ]
-
-    print()
-    print("lambda2 sweep")
-    print("-------------")
-    print(
-        "lambda2    objective     iterations    trajectory"
-    )
-
-    for lambda2 in lambda_values:
-
-        X, result = solve_x(
-            X0,
-            S,
-            Y,
-            U,
-            K,
-            J,
-            rho=1e-6,
-            lambda2=lambda2,
-            tau=1e-2,
-            maxiter=200,
-        )
-
-        trajectory = [
-            int(np.argmax(X[0, :, j, t]))
-            for t in range(T)
-        ]
-
-        print(
-            f"{lambda2:7.2f}"
-            f"    {result.fun:10.6f}"
-            f"    {result.nit:10d}"
-            f"    {trajectory}"
-        )
 
 if __name__ == "__main__":
-    # optimization_test()
-    # gradient_test()
-    lambda_sweep_test()
+    gradient_test()
