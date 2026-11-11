@@ -1,0 +1,31 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyd
+
+# Virtual environments
+.venv/
+venv/
+
+# VS Code local settings
+.vscode/
+
+# Test/cache files
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Build/package output
+build/
+dist/
+*.egg-info/
+
+# Data and experiment output
+data/
+results/
+output/
+*.mat
+
+# OS files
+.DS_Store
+Thumbs.db
