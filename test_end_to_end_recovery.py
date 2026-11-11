@@ -1,12 +1,7 @@
 import numpy as np
 
-from multiscale_convolution import (
-    MultiscaleConvolutionOperator,
-)
-from x_update import (
-    objective_components,
-    solve_x,
-)
+from multiscale_convolution import MultiscaleConvolutionOperator
+from sparse_admm import solve_l1_admm
 
 
 def make_dictionary(M):
@@ -15,12 +10,11 @@ def make_dictionary(M):
     """
     x = np.arange(M, dtype=np.float64)
 
-    atom_center = (M - 1) / 2.0
-    atom_width = 4.0
+    center = (M - 1) / 2.0
+    width = 4.0
 
     d = np.exp(
-        -0.5
-        * ((x - atom_center) / atom_width) ** 2
+        -0.5 * ((x - center) / width) ** 2
     )
 
     d /= np.linalg.norm(d)
@@ -30,8 +24,8 @@ def make_dictionary(M):
 
 def make_true_coefficients(N, K, J, T):
     """
-    Create a coefficient peak following an allowed diagonal
-    trajectory through position-scale space.
+    Create a known coefficient trajectory through
+    position-scale space.
     """
     X_true = np.zeros(
         (N, K, J, T),
@@ -39,37 +33,40 @@ def make_true_coefficients(N, K, J, T):
     )
 
     positions = [36, 37, 38, 39, 40]
-    scales = [0, 1, 2, 1, 0]
+    scale_indices = [0, 1, 2, 1, 0]
 
     for t in range(T):
         n = positions[t]
-        j = scales[t]
+        j = scale_indices[t]
 
         X_true[n, 0, j, t] = 1.0
 
-    return X_true, positions, scales
+    return X_true, positions, scale_indices
 
 
 def trajectory_from_coefficients(X):
     """
-    Return the largest-magnitude coefficient location
-    (position, scale) in each frame.
+    Find the largest coefficient in each frame.
+
+    This test assumes K=1.
     """
     N, K, J, T = X.shape
 
     if K != 1:
         raise ValueError(
-            "This helper assumes K=1"
+            "trajectory_from_coefficients assumes K=1"
         )
 
     positions = []
-    scales = []
+    scale_indices = []
     amplitudes = []
 
     for t in range(T):
-        frame = np.abs(X[:, 0, :, t])
+        frame = X[:, 0, :, t]
 
-        flat_index = int(np.argmax(frame))
+        flat_index = int(
+            np.argmax(np.abs(frame))
+        )
 
         n, j = np.unravel_index(
             flat_index,
@@ -77,25 +74,45 @@ def trajectory_from_coefficients(X):
         )
 
         positions.append(int(n))
-        scales.append(int(j))
+        scale_indices.append(int(j))
         amplitudes.append(
             float(X[n, 0, j, t])
         )
 
-    return positions, scales, amplitudes
+    return positions, scale_indices, amplitudes
 
 
 def relative_error(x, y):
-    return np.linalg.norm(x - y) / max(
+    """
+    Relative L2/Frobenius error.
+    """
+    return np.linalg.norm(
+        x - y
+    ) / max(
         1e-15,
         np.linalg.norm(y),
+    )
+
+
+def count_significant(X, threshold=1e-3):
+    """
+    Number of coefficients whose magnitude exceeds
+    a reporting threshold.
+    """
+    return int(
+        np.count_nonzero(
+            np.abs(X) > threshold
+        )
     )
 
 
 def recovery_test():
     rng = np.random.default_rng(50)
 
+    # -------------------------------------------------
     # Problem dimensions
+    # -------------------------------------------------
+
     M = 41
     N = 96
     K = 1
@@ -110,6 +127,10 @@ def recovery_test():
 
     J = len(scales)
 
+    # -------------------------------------------------
+    # Fixed dictionary and forward operator
+    # -------------------------------------------------
+
     D = make_dictionary(M)
 
     operator = MultiscaleConvolutionOperator(
@@ -120,19 +141,29 @@ def recovery_test():
         normalize=True,
     )
 
-    X_true, true_positions, true_scales = (
-        make_true_coefficients(
-            N=N,
-            K=K,
-            J=J,
-            T=T,
-        )
+    # -------------------------------------------------
+    # Ground-truth sparse coefficients
+    # -------------------------------------------------
+
+    (
+        X_true,
+        true_positions,
+        true_scales,
+    ) = make_true_coefficients(
+        N=N,
+        K=K,
+        J=J,
+        T=T,
     )
 
-    # Generate noiseless measurements.
-    S_clean = operator.forward(X_true)
+    # -------------------------------------------------
+    # Synthetic measurements
+    # -------------------------------------------------
 
-    # Add Gaussian measurement noise.
+    S_clean = operator.forward(
+        X_true
+    )
+
     noise_level = 0.02
 
     noise = rng.normal(
@@ -147,68 +178,139 @@ def recovery_test():
 
     S_noisy = S_clean + noise
 
-    measured_noise = relative_error(
+    actual_noise = relative_error(
         S_noisy,
         S_clean,
     )
 
-    # Start from the adjoint/backprojection.
+    # -------------------------------------------------
+    # Initial coefficient estimate
+    # -------------------------------------------------
+
     X0 = operator.adjoint(
         S_noisy,
         structured=True,
     )
 
-    # Scale the initialization to avoid beginning with
-    # excessively large correlated coefficients.
-    max_abs = np.max(np.abs(X0))
+    max_abs = np.max(
+        np.abs(X0)
+    )
 
     if max_abs > 0:
-        X0 = X0 / max_abs
+        X0 /= max_abs
 
-    # This is still an isolated coefficient-subproblem test.
-    # Y=0 and U=0 make the ADMM term a small L2 penalty.
-    Y = np.zeros_like(X0)
-    U = np.zeros_like(X0)
-
-    rho = 1e-3
-    tau = 1e-2
+    # -------------------------------------------------
+    # Report setup
+    # -------------------------------------------------
 
     print()
-    print("End-to-end coefficient recovery")
-    print("-------------------------------")
+    print("End-to-end L1-ADMM recovery")
+    print("---------------------------")
     print("X shape:", X_true.shape)
     print("S shape:", S_noisy.shape)
-    print(f"relative noise level: {measured_noise:.6e}")
+
+    print(
+        f"relative noise level: "
+        f"{actual_noise:.6e}"
+    )
+
+    print()
+    print("True trajectory")
+    print("---------------")
+    print(
+        "positions:",
+        true_positions,
+    )
+    print(
+        "scales:   ",
+        true_scales,
+    )
 
     print()
     print(
-        "lambda2    success    iterations    "
-        "signal error    coefficient error"
+        "Initial significant coefficients:",
+        count_significant(X0),
     )
 
-    results = {}
+    # -------------------------------------------------
+    # ADMM parameters
+    # -------------------------------------------------
 
-    for lambda2 in [0.0, 0.1, 1.0]:
-        X_hat, result = solve_x(
+    tau = 1e-2
+
+    lambda2 = 0.1
+
+    rho = 0.1
+
+    lambda1_values = [
+        0.001,
+        0.003,
+        0.01,
+        0.03,
+    ]
+
+    lambda1_values = [0.03]
+
+    # -------------------------------------------------
+    # Run the L1 sweep
+    # -------------------------------------------------
+
+    print()
+    print("L1-ADMM sweep")
+    print("-------------")
+
+    summary = []
+
+    for lambda1 in lambda1_values:
+
+        print()
+        print("=" * 60)
+        print(
+            f"lambda1 = {lambda1:.4g}, "
+            f"lambda2 = {lambda2:.4g}, "
+            f"rho = {rho:.4g}"
+        )
+        print("=" * 60)
+
+        (
+            X_admm,
+            Y_admm,
+            U_admm,
+            info,
+        ) = solve_l1_admm(
             X0=X0,
             S=S_noisy,
-            Y=Y,
-            U=U,
             operator=operator,
-            rho=rho,
+            lambda1=lambda1,
             lambda2=lambda2,
             tau=tau,
-            maxiter=300,
-            ftol=1e-12,
-            gtol=1e-8,
-            maxls=50,
+            rho=rho,
+            rho_mu=10.0,
+            rho_tau=2.0,
+            max_admm_iter=200,
+            x_maxiter=50,
+            abs_tol=1e-4,
+            rel_tol=1e-3,
+            nonnegative=True,
+            adaptive_rho=True,
+            verbose=True,
         )
 
-        S_hat = operator.forward(X_hat)
+        # Y is the sparse coefficient estimate.
+        X_hat = Y_admm
+
+        S_hat = operator.forward(
+            X_hat
+        )
 
         signal_error = relative_error(
             S_hat,
             S_clean,
+        )
+
+        noisy_signal_error = relative_error(
+            S_hat,
+            S_noisy,
         )
 
         coefficient_error = relative_error(
@@ -216,81 +318,173 @@ def recovery_test():
             X_true,
         )
 
-        results[lambda2] = {
-            "X": X_hat,
-            "result": result,
-            "signal_error": signal_error,
-            "coefficient_error": coefficient_error,
-        }
-
-        print(
-            f"{lambda2:7.2f}"
-            f"    {str(result.success):7s}"
-            f"    {result.nit:10d}"
-            f"    {signal_error:12.6e}"
-            f"    {coefficient_error:17.6e}"
+        (
+            positions,
+            scale_indices,
+            amplitudes,
+        ) = trajectory_from_coefficients(
+            X_hat
         )
 
-    print()
-    print("True trajectory")
-    print("---------------")
-    print("positions:", true_positions)
-    print("scales:   ", true_scales)
-
-    for lambda2 in [0.0, 0.1, 1.0]:
-        X_hat = results[lambda2]["X"]
-
-        positions, scale_indices, amplitudes = (
-            trajectory_from_coefficients(X_hat)
+        significant = count_significant(
+            X_hat
         )
 
-        print()
-        print(f"Recovered trajectory, lambda2={lambda2}")
-        print("-" * 36)
-        print("positions: ", positions)
-        print("scales:    ", scale_indices)
+        exact_zeros = (
+            X_hat.size
+            - np.count_nonzero(X_hat)
+        )
+
         print(
-            "amplitudes: ",
+            "converged:          ",
+            info["converged"],
+        )
+
+        print(
+            "ADMM iterations:    ",
+            info["iterations"],
+        )
+
+        print(
+            "final rho:          ",
+            info["rho"],
+        )
+
+        print(
+            "exact nonzeros:      ",
+            info["nonzero_count"],
+        )
+
+        print(
+            "significant (>1e-3):",
+            significant,
+        )
+
+        print(
+            "exact zeros:         ",
+            exact_zeros,
+        )
+
+        print(
+            f"signal error clean:  "
+            f"{signal_error:.6e}"
+        )
+
+        print(
+            f"signal error noisy:  "
+            f"{noisy_signal_error:.6e}"
+        )
+
+        print(
+            f"coefficient error:   "
+            f"{coefficient_error:.6e}"
+        )
+
+        print(
+            f"primal residual:     "
+            f"{info['final_primal_residual']:.6e}"
+        )
+
+        print(
+            f"dual residual:       "
+            f"{info['final_dual_residual']:.6e}"
+        )
+
+        print(
+            "positions:           ",
+            positions,
+        )
+
+        print(
+            "scales:              ",
+            scale_indices,
+        )
+
+        print(
+            "amplitudes:          ",
             [
                 round(value, 4)
                 for value in amplitudes
             ],
         )
 
-        components = objective_components(
-            X=X_hat,
-            S=S_noisy,
-            Y=Y,
-            U=U,
-            operator=operator,
-            rho=rho,
-            lambda2=lambda2,
-            tau=tau,
+        summary.append(
+            {
+                "lambda1": lambda1,
+                "converged": info[
+                    "converged"
+                ],
+                "iterations": info[
+                    "iterations"
+                ],
+                "nonzeros": info[
+                    "nonzero_count"
+                ],
+                "significant": significant,
+                "signal_error": signal_error,
+                "coefficient_error":
+                    coefficient_error,
+                "positions": positions,
+                "scales": scale_indices,
+            }
         )
 
-        print("objective components:")
+    # -------------------------------------------------
+    # Compact comparison
+    # -------------------------------------------------
+
+    print()
+    print()
+    print("Summary")
+    print("-------")
+
+    print(
+        "lambda1   conv   iter   "
+        "nz    sig    signal err    coeff err"
+    )
+
+    for row in summary:
         print(
-            f"  data:             "
-            f"{components['data']:.6e}"
+            f"{row['lambda1']:7.3f}"
+            f"   {str(row['converged']):5s}"
+            f"   {row['iterations']:4d}"
+            f"   {row['nonzeros']:4d}"
+            f"   {row['significant']:4d}"
+            f"   {row['signal_error']:10.4e}"
+            f"   {row['coefficient_error']:10.4e}"
         )
+
+    print()
+    print("Trajectory comparison")
+    print("---------------------")
+
+    print(
+        "true positions:",
+        true_positions,
+    )
+
+    print(
+        "true scales:   ",
+        true_scales,
+    )
+
+    for row in summary:
+        print()
+
         print(
-            f"  ADMM quadratic:   "
-            f"{components['admm']:.6e}"
+            f"lambda1={row['lambda1']:.3f}"
         )
+
         print(
-            f"  raw softmin:      "
-            f"{components['softmin']:.6e}"
+            "  positions:",
+            row["positions"],
         )
+
         print(
-            f"  weighted softmin: "
-            f"{components['weighted_softmin']:.6e}"
-        )
-        print(
-            f"  total:            "
-            f"{components['total']:.6e}"
+            "  scales:   ",
+            row["scales"],
         )
 
 
 if __name__ == "__main__":
     recovery_test()
-    
