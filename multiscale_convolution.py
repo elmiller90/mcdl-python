@@ -1,38 +1,32 @@
 import numpy as np
 
 from multiscale_operator import resample_atom
-from convolution_operator import ConvolutionOperator
+from zero_padded_convolution import ZeroPaddedConvolutionOperator
 
 
 class MultiscaleConvolutionOperator:
     """
-    Fixed-dictionary multiscale 1-D convolution operator.
+    MATLAB-compatible fixed-dictionary multiscale convolution operator.
 
-    Parameters
-    ----------
-    D : ndarray, shape (M, K)
-        Base dictionary. One atom per column.
+    Base dictionary:
+        D.shape == (M, K)
 
-    scales : sequence of (c1, c2)
-        Rational scales c1/c2.
+    Scaled dictionary:
+        D_scaled.shape == (N, K*J)
 
-    center : int
-        Dictionary center using the MATLAB 1-based convention.
+    Extended coefficient domain:
+        L = N + M - 1
 
-    N : int
-        Signal/coefficient-map length.
+    Structured coefficients:
+        X.shape == (L, K, J, T)
 
-    normalize : bool
-        If True, normalize every resampled atom to unit L2 norm.
+    Physical signals:
+        S.shape == (N, T)
 
-    Notes
-    -----
-    Internally the scaled filters are flattened in atom-major order:
+    Channel order is atom-major:
 
         (k=0,j=0), (k=0,j=1), ...,
         (k=1,j=0), ...
-
-    Thus F = K*J.
     """
 
     def __init__(
@@ -43,7 +37,10 @@ class MultiscaleConvolutionOperator:
         N,
         normalize=True,
     ):
-        D = np.asarray(D, dtype=np.float64)
+        D = np.asarray(
+            D,
+            dtype=np.float64,
+        )
 
         if D.ndim == 1:
             D = D[:, None]
@@ -54,10 +51,21 @@ class MultiscaleConvolutionOperator:
             )
 
         if N <= 0:
-            raise ValueError("N must be positive")
+            raise ValueError(
+                "N must be positive"
+            )
 
         self.D_base = D.copy()
+
         self.M, self.K = D.shape
+        self.N = int(N)
+
+        if self.M > self.N:
+            raise ValueError(
+                "Dictionary support M cannot exceed N"
+            )
+
+        self.L = self.N + self.M - 1
 
         self.scales = list(scales)
         self.J = len(self.scales)
@@ -68,8 +76,8 @@ class MultiscaleConvolutionOperator:
             )
 
         self.F = self.K * self.J
+
         self.center = int(center)
-        self.N = int(N)
         self.normalize = bool(normalize)
 
         self.D_scaled = np.zeros(
@@ -89,23 +97,42 @@ class MultiscaleConvolutionOperator:
 
         self._build_scaled_dictionary()
 
-        self.conv = ConvolutionOperator(
-            self.D_scaled
+        # MATLAB-compatible padded convolution engine.
+        self.conv = ZeroPaddedConvolutionOperator(
+            D=self.D_scaled,
+            M=self.M,
         )
+
+        # Sanity check: both classes must agree on L.
+        if self.conv.L != self.L:
+            raise RuntimeError(
+                "Inconsistent extended convolution length"
+            )
 
     def channel(self, k, j):
         """
-        Flatten atom/scale pair to filter-channel index.
+        Flatten atom/scale pair to channel index.
         """
-        if not (0 <= k < self.K):
-            raise IndexError("Invalid atom index k")
+        if not 0 <= k < self.K:
+            raise IndexError(
+                "Invalid atom index k"
+            )
 
-        if not (0 <= j < self.J):
-            raise IndexError("Invalid scale index j")
+        if not 0 <= j < self.J:
+            raise IndexError(
+                "Invalid scale index j"
+            )
 
         return k * self.J + j
 
     def _build_scaled_dictionary(self):
+        """
+        Construct each scaled atom at physical length N.
+
+        Each resampled atom is optionally normalized to
+        unit L2 norm, matching the MATLAB scaled-dictionary
+        normalization convention.
+        """
         for k in range(self.K):
             d = self.D_base[:, k]
 
@@ -120,12 +147,15 @@ class MultiscaleConvolutionOperator:
                     N=self.N,
                 )
 
-                norm_val = np.linalg.norm(raw)
+                norm_val = np.linalg.norm(
+                    raw
+                )
 
                 if norm_val == 0:
                     raise ValueError(
-                        "Resampling produced a zero-norm "
-                        f"atom for k={k}, j={j}, "
+                        "Resampling produced a "
+                        "zero-norm atom for "
+                        f"k={k}, j={j}, "
                         f"scale={c1}/{c2}"
                     )
 
@@ -135,105 +165,197 @@ class MultiscaleConvolutionOperator:
                     self.D_scaled[:, f] = (
                         raw / norm_val
                     )
-                    self.norm_vals[k, j] = norm_val
+
+                    self.norm_vals[
+                        k, j
+                    ] = norm_val
+
                 else:
                     self.D_scaled[:, f] = raw
-                    self.norm_vals[k, j] = 1.0
 
-                self.shifts[k, j] = shift
+                    self.norm_vals[
+                        k, j
+                    ] = 1.0
+
+                self.shifts[
+                    k, j
+                ] = shift
 
     def forward(self, X):
         """
-        Compute S = A_D X.
+        Compute the physical signal
 
-        X may have shape:
+            S = A_D X.
 
-            (N, K, J, T)
+        X may be supplied as:
 
-        or flattened channel form:
+            structured:
+                (L, K, J, T)
 
-            (N, K*J, T)
+        or:
+
+            flattened:
+                (L, K*J, T)
 
         Returns
         -------
-        S : ndarray, shape (N, T)
+        S : ndarray
+            Shape (N, T).
         """
-        Xf = self._flatten_x(X)
+        X_flat = self._flatten_x(X)
 
-        return self.conv.forward(Xf)
+        return self.conv.forward(
+            X_flat
+        )
 
-    def adjoint(self, R, structured=True):
+    def forward_padded(self, X):
         """
-        Compute A_D^* R with D fixed.
+        Return the complete length-L convolution before
+        the MATLAB pre-crop.
+
+        Returns
+        -------
+        Z : ndarray
+            Shape (L, T).
+        """
+        X_flat = self._flatten_x(X)
+
+        return self.conv.forward_padded(
+            X_flat
+        )
+
+    def adjoint(
+        self,
+        R,
+        structured=True,
+    ):
+        """
+        Compute the coefficient-space adjoint
+
+            A_D^* R.
 
         Parameters
         ----------
-        R : ndarray, shape (N, T)
+        R : ndarray
+            Physical signal residual of shape (N, T).
 
         structured : bool
-            If True return shape (N,K,J,T).
-            Otherwise return (N,K*J,T).
+            If True return
+
+                (L, K, J, T)
+
+            otherwise return
+
+                (L, K*J, T).
         """
-        Xf = self.conv.adjoint(R)
+        X_flat = self.conv.adjoint(R)
 
         if not structured:
-            return Xf
+            return X_flat
 
-        return self._unflatten_x(Xf)
+        return self._unflatten_x(
+            X_flat
+        )
+
+    def pad_residual(self, R):
+        """
+        Expose the MATLAB-compatible residual pre-padding
+        for diagnostics.
+
+        Input:
+            (N, T)
+
+        Output:
+            (L, T)
+        """
+        return self.conv.pad_residual(R)
 
     def _flatten_x(self, X):
-        X = np.asarray(X, dtype=np.float64)
+        """
+        Convert structured coefficients to flattened
+        channel form.
+        """
+        X = np.asarray(
+            X,
+            dtype=np.float64,
+        )
 
         if X.ndim == 3:
-            if X.shape[0] != self.N:
+            if X.shape[0] != self.L:
                 raise ValueError(
-                    "X first dimension must equal N"
+                    "Flattened X first dimension "
+                    f"must equal L={self.L}"
                 )
 
             if X.shape[1] != self.F:
                 raise ValueError(
-                    f"Expected {self.F} channels"
+                    "Flattened X second dimension "
+                    f"must equal F={self.F}"
                 )
 
             return X
 
         if X.ndim != 4:
             raise ValueError(
-                "X must have shape (N,K,J,T) "
-                "or (N,K*J,T)"
+                "X must have shape "
+                "(L,K,J,T) or (L,K*J,T)"
             )
 
-        N, K, J, T = X.shape
+        L, K, J, T = X.shape
 
-        if N != self.N:
+        if L != self.L:
             raise ValueError(
-                "X first dimension must equal N"
+                f"Expected coefficient length "
+                f"L={self.L}, got {L}"
             )
 
-        if K != self.K or J != self.J:
+        if K != self.K:
             raise ValueError(
-                f"Expected X shape "
-                f"(N,{self.K},{self.J},T)"
+                f"Expected K={self.K}, got {K}"
             )
 
-        # C-order flattening gives:
-        # (k=0,j=0), (k=0,j=1), ...
+        if J != self.J:
+            raise ValueError(
+                f"Expected J={self.J}, got {J}"
+            )
+
         return X.reshape(
-            self.N,
+            self.L,
             self.F,
             T,
         )
 
     def _unflatten_x(self, X):
-        N, F, T = X.shape
+        """
+        Convert flattened coefficient channels back to
 
-        if N != self.N or F != self.F:
+            (L, K, J, T).
+        """
+        X = np.asarray(
+            X,
+            dtype=np.float64,
+        )
+
+        if X.ndim != 3:
             raise ValueError(
-                "Invalid flattened X dimensions"
+                "Flattened X must have "
+                "shape (L,F,T)"
+            )
+
+        L, F, T = X.shape
+
+        if L != self.L:
+            raise ValueError(
+                f"Expected L={self.L}, got {L}"
+            )
+
+        if F != self.F:
+            raise ValueError(
+                f"Expected F={self.F}, got {F}"
             )
 
         return X.reshape(
-            self.N,
+            self.L,
             self.K,
             self.J,
             T,
