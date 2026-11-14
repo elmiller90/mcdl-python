@@ -1,29 +1,37 @@
 import numpy as np
 
-from x_update import solve_x
+from softmin import softmin
+from x_update import (
+    solve_x,
+    structured_to_softmin,
+)
 
 
-def soft_threshold(x, threshold, nonnegative=False):
+def soft_threshold(
+    x,
+    threshold,
+    nonnegative=False,
+):
     """
     Proximal operator for threshold * ||x||_1.
+
+    Works elementwise on L-domain coefficients.
 
     Parameters
     ----------
     x : ndarray
-        Input array.
+        Coefficients of arbitrary shape.
 
     threshold : float
         Nonnegative shrinkage threshold.
 
     nonnegative : bool
-        If True, enforce nonnegative coefficients.
-
-    Returns
-    -------
-    y : ndarray
-        Thresholded coefficients.
+        If True, additionally enforce x >= 0.
     """
-    x = np.asarray(x, dtype=np.float64)
+    x = np.asarray(
+        x,
+        dtype=np.float64,
+    )
 
     if threshold < 0:
         raise ValueError(
@@ -31,12 +39,71 @@ def soft_threshold(x, threshold, nonnegative=False):
         )
 
     if nonnegative:
-        return np.maximum(x - threshold, 0.0)
+        return np.maximum(
+            x - threshold,
+            0.0,
+        )
 
     return np.sign(x) * np.maximum(
         np.abs(x) - threshold,
         0.0,
     )
+
+
+def validate_admm_problem(
+    X,
+    S,
+    operator,
+):
+    """
+    Validate MATLAB-compatible ADMM dimensions.
+
+    Coefficients:
+        X : (L,K,J,T)
+
+    Physical measurements:
+        S : (N,T)
+
+    where:
+        L = N + M - 1.
+    """
+    X = np.asarray(X)
+    S = np.asarray(S)
+
+    if X.ndim != 4:
+        raise ValueError(
+            "X must have shape (L,K,J,T)"
+        )
+
+    L, K, J, T = X.shape
+
+    if L != operator.L:
+        raise ValueError(
+            f"Coefficient length must be "
+            f"L={operator.L}, got {L}"
+        )
+
+    if K != operator.K:
+        raise ValueError(
+            f"Expected K={operator.K}, got {K}"
+        )
+
+    if J != operator.J:
+        raise ValueError(
+            f"Expected J={operator.J}, got {J}"
+        )
+
+    expected_s_shape = (
+        operator.N,
+        T,
+    )
+
+    if S.shape != expected_s_shape:
+        raise ValueError(
+            f"S must have shape "
+            f"{expected_s_shape}, "
+            f"got {S.shape}"
+        )
 
 
 def l1_objective(
@@ -48,27 +115,54 @@ def l1_objective(
     tau,
 ):
     """
-    Evaluate the unsplit optimization objective.
+    Evaluate the unsplit objective
 
-        0.5 ||A X - S||^2
+        0.5 ||A_D X - S||_F^2
         + lambda1 ||X||_1
         + lambda2 R_softmin(X)
+
+    with
+
+        X : (L,K,J,T)
+        S : (N,T).
     """
-    from softmin import softmin
-    from x_update import structured_to_softmin
+    X = np.asarray(
+        X,
+        dtype=np.float64,
+    )
+
+    S = np.asarray(
+        S,
+        dtype=np.float64,
+    )
+
+    validate_admm_problem(
+        X,
+        S,
+        operator,
+    )
 
     AX = operator.forward(X)
+
     residual = AX - S
 
-    data_term = 0.5 * np.sum(
-        residual ** 2
+    data_term = (
+        0.5
+        * np.sum(
+            residual ** 2
+        )
     )
 
-    l1_term = lambda1 * np.sum(
-        np.abs(X)
+    l1_term = (
+        lambda1
+        * np.sum(
+            np.abs(X)
+        )
     )
 
-    X_legacy = structured_to_softmin(X)
+    X_legacy = structured_to_softmin(
+        X
+    )
 
     softmin_value = softmin(
         X_legacy,
@@ -80,22 +174,33 @@ def l1_objective(
         return_gradient=False,
     )
 
-    softmin_term = lambda2 * softmin_value
+    weighted_softmin = (
+        lambda2
+        * softmin_value
+    )
 
     total = (
         data_term
         + l1_term
-        + softmin_term
+        + weighted_softmin
     )
 
     return {
-        "data": float(data_term),
-        "l1": float(l1_term),
-        "softmin": float(softmin_value),
-        "weighted_softmin": float(
-            softmin_term
+        "data": float(
+            data_term
         ),
-        "total": float(total),
+        "l1": float(
+            l1_term
+        ),
+        "softmin": float(
+            softmin_value
+        ),
+        "weighted_softmin": float(
+            weighted_softmin
+        ),
+        "total": float(
+            total
+        ),
     }
 
 
@@ -118,59 +223,39 @@ def solve_l1_admm(
     verbose=True,
 ):
     """
-    Solve the softmin-regularized sparse coefficient problem.
+    Solve
 
-    Parameters
+        min_X
+            0.5 ||A_D X - S||_F^2
+            + lambda1 ||X||_1
+            + lambda2 R_softmin(X)
+
+    using scaled-form ADMM with splitting X = Y.
+
+    Dimensions
     ----------
-    X0 : ndarray, shape (N, K, J, T)
-        Initial coefficient estimate.
+    X,Y,U :
+        (L,K,J,T)
 
-    S : ndarray, shape (N, T)
-        Observed signals.
+    S :
+        (N,T)
 
-    operator :
-        Fixed MultiscaleConvolutionOperator.
-
-    lambda1 : float
-        L1 sparsity coefficient.
-
-    lambda2 : float
-        Softmin trajectory coefficient.
-
-    tau : float
-        Softmin temperature.
-
-    rho : float
-        Initial ADMM penalty.
-
-    max_admm_iter : int
-        Maximum outer ADMM iterations.
-
-    x_maxiter : int
-        Maximum L-BFGS iterations per X update.
-
-    abs_tol, rel_tol : float
-        ADMM stopping tolerances.
-
-    nonnegative : bool
-        Enforce Y >= 0 in the proximal update.
-
-    adaptive_rho : bool
-        Enable residual-balancing rho updates.
+    L :
+        N + M - 1
 
     Returns
     -------
-    X : ndarray
-        Smooth/data-fitting variable.
+    X :
+        Smooth/data-fitting ADMM variable.
 
-    Y : ndarray
+    Y :
         Sparse coefficient estimate.
 
-    U : ndarray
+    U :
         Scaled dual variable.
 
-    info : dict
-        Convergence diagnostic information.
+    info :
+        Convergence and diagnostic information.
     """
     X = np.asarray(
         X0,
@@ -182,15 +267,11 @@ def solve_l1_admm(
         dtype=np.float64,
     )
 
-    if X.ndim != 4:
-        raise ValueError(
-            "X0 must have shape (N, K, J, T)"
-        )
-
-    if S.shape != (X.shape[0], X.shape[3]):
-        raise ValueError(
-            "S must have shape (N, T)"
-        )
+    validate_admm_problem(
+        X,
+        S,
+        operator,
+    )
 
     if lambda1 < 0:
         raise ValueError(
@@ -202,13 +283,51 @@ def solve_l1_admm(
             "lambda2 must be nonnegative"
         )
 
+    if tau <= 0:
+        raise ValueError(
+            "tau must be positive"
+        )
+
     if rho <= 0:
         raise ValueError(
             "rho must be positive"
         )
 
-    # A sparse initialization is often preferable to
-    # setting Y equal to a dense backprojection.
+    if max_admm_iter <= 0:
+        raise ValueError(
+            "max_admm_iter must be positive"
+        )
+
+    if x_maxiter <= 0:
+        raise ValueError(
+            "x_maxiter must be positive"
+        )
+
+    if abs_tol < 0:
+        raise ValueError(
+            "abs_tol must be nonnegative"
+        )
+
+    if rel_tol < 0:
+        raise ValueError(
+            "rel_tol must be nonnegative"
+        )
+
+    if adaptive_rho:
+        if rho_mu <= 1:
+            raise ValueError(
+                "rho_mu must be greater than 1"
+            )
+
+        if rho_tau <= 1:
+            raise ValueError(
+                "rho_tau must be greater than 1"
+            )
+
+    # -------------------------------------------------
+    # ADMM initialization
+    # -------------------------------------------------
+
     Y = soft_threshold(
         X,
         lambda1 / rho,
@@ -221,20 +340,46 @@ def solve_l1_admm(
 
     n_variables = X.size
 
+    converged = False
+
     if verbose:
         print()
-        print("L1 ADMM")
-        print("-------")
+        print("L1 ADMM - extended coefficient domain")
+        print("------------------------------------")
+
+        print(
+            f"N={operator.N}, "
+            f"M={operator.M}, "
+            f"L={operator.L}, "
+            f"K={operator.K}, "
+            f"J={operator.J}, "
+            f"T={X.shape[3]}"
+        )
+
+        print()
+
         print(
             "iter   objective       data"
             "          l1       primal"
             "       dual       rho"
         )
 
-    converged = False
+    # -------------------------------------------------
+    # ADMM iterations
+    # -------------------------------------------------
 
-    for iteration in range(1, max_admm_iter + 1):
+    for iteration in range(
+        1,
+        max_admm_iter + 1,
+    ):
+        # ---------------------------------------------
         # X update
+        #
+        # X lives on the extended L-domain.
+        # operator.forward(X) returns physical N-domain
+        # measurements.
+        # ---------------------------------------------
+
         X, x_result = solve_x(
             X0=X,
             S=S,
@@ -250,7 +395,10 @@ def solve_l1_admm(
             maxls=50,
         )
 
-        # Y update
+        # ---------------------------------------------
+        # Y update: L1 proximal operator
+        # ---------------------------------------------
+
         Y_previous = Y.copy()
 
         Y = soft_threshold(
@@ -259,21 +407,32 @@ def solve_l1_admm(
             nonnegative=nonnegative,
         )
 
+        # ---------------------------------------------
         # Scaled dual update
+        # ---------------------------------------------
+
         primal_array = X - Y
+
         U = U + primal_array
 
-        # Residuals
+        # ---------------------------------------------
+        # ADMM residuals
+        # ---------------------------------------------
+
         primal_residual = np.linalg.norm(
             primal_array
         )
 
-        dual_residual = rho * np.linalg.norm(
-            Y - Y_previous
+        dual_residual = (
+            rho
+            * np.linalg.norm(
+                Y - Y_previous
+            )
         )
 
         primal_tolerance = (
-            np.sqrt(n_variables) * abs_tol
+            np.sqrt(n_variables)
+            * abs_tol
             + rel_tol
             * max(
                 np.linalg.norm(X),
@@ -282,12 +441,15 @@ def solve_l1_admm(
         )
 
         dual_tolerance = (
-            np.sqrt(n_variables) * abs_tol
+            np.sqrt(n_variables)
+            * abs_tol
             + rel_tol
             * rho
             * np.linalg.norm(U)
         )
 
+        # Y is the sparse variable and is therefore
+        # used to report the unsplit objective.
         components = l1_objective(
             X=Y,
             S=S,
@@ -297,15 +459,21 @@ def solve_l1_admm(
             tau=tau,
         )
 
-        nonzero_count = int(
+        exact_nonzero_count = int(
             np.count_nonzero(Y)
         )
 
         record = {
             "iteration": iteration,
-            "objective": components["total"],
-            "data": components["data"],
-            "l1": components["l1"],
+            "objective": components[
+                "total"
+            ],
+            "data": components[
+                "data"
+            ],
+            "l1": components[
+                "l1"
+            ],
             "softmin": components[
                 "weighted_softmin"
             ],
@@ -321,8 +489,11 @@ def solve_l1_admm(
             "dual_tolerance": float(
                 dual_tolerance
             ),
-            "rho": float(rho),
-            "nonzero_count": nonzero_count,
+            "rho": float(
+                rho
+            ),
+            "nonzero_count":
+                exact_nonzero_count,
             "x_success": bool(
                 x_result.success
             ),
@@ -352,6 +523,10 @@ def solve_l1_admm(
                 f"  {rho:8.2e}"
             )
 
+        # ---------------------------------------------
+        # Stopping criterion
+        # ---------------------------------------------
+
         if (
             primal_residual
             <= primal_tolerance
@@ -361,43 +536,87 @@ def solve_l1_admm(
             converged = True
             break
 
+        # ---------------------------------------------
+        # Residual-balanced adaptive rho
+        # ---------------------------------------------
+
         if adaptive_rho:
             old_rho = rho
 
             if (
                 primal_residual
-                > rho_mu * dual_residual
+                > rho_mu
+                * dual_residual
             ):
                 rho *= rho_tau
 
             elif (
                 dual_residual
-                > rho_mu * primal_residual
+                > rho_mu
+                * primal_residual
             ):
                 rho /= rho_tau
 
-            # Preserve the unscaled dual variable when rho
-            # changes: u_new = (rho_old/rho_new) u_old.
+            # U is the scaled dual variable.
+            #
+            # Preserve the corresponding unscaled
+            # dual variable when rho changes.
             if rho != old_rho:
-                U *= old_rho / rho
+                U *= (
+                    old_rho
+                    / rho
+                )
+
+    # -------------------------------------------------
+    # Final diagnostics
+    # -------------------------------------------------
+
+    final_record = history[-1]
 
     info = {
-        "converged": converged,
-        "iterations": iteration,
-        "rho": float(rho),
-        "history": history,
-        "final_objective": history[-1][
-            "objective"
-        ],
-        "final_primal_residual": history[-1][
-            "primal_residual"
-        ],
-        "final_dual_residual": history[-1][
-            "dual_residual"
-        ],
-        "nonzero_count": history[-1][
-            "nonzero_count"
-        ],
+        "converged":
+            converged,
+        "iterations":
+            iteration,
+        "N":
+            int(operator.N),
+        "M":
+            int(operator.M),
+        "L":
+            int(operator.L),
+        "rho":
+            float(rho),
+        "history":
+            history,
+        "final_objective":
+            final_record[
+                "objective"
+            ],
+        "final_primal_residual":
+            final_record[
+                "primal_residual"
+            ],
+        "final_dual_residual":
+            final_record[
+                "dual_residual"
+            ],
+        "final_primal_tolerance":
+            final_record[
+                "primal_tolerance"
+            ],
+        "final_dual_tolerance":
+            final_record[
+                "dual_tolerance"
+            ],
+        "nonzero_count":
+            final_record[
+                "nonzero_count"
+            ],
     }
 
-    return X, Y, U, info
+    return (
+        X,
+        Y,
+        U,
+        info,
+    )
