@@ -5,20 +5,58 @@ def build_transition_kernel(graph, epsilon=0.5):
     if epsilon <= 0:
         raise ValueError("epsilon must be positive")
 
-    w = np.exp(-graph.cost / epsilon)
+    src = np.asarray(graph.src)
+    dst = np.asarray(graph.dst)
+    cost = np.asarray(graph.cost)
+
+    if src.ndim != 1:
+        raise ValueError(
+            f"graph.src must be 1-D, got shape {src.shape}"
+        )
+
+    if dst.ndim != 1:
+        raise ValueError(
+            f"graph.dst must be 1-D, got shape {dst.shape}"
+        )
+
+    if cost.ndim != 1:
+        raise ValueError(
+            f"graph.cost must be 1-D, got shape {cost.shape}"
+        )
+
+    if not (
+        len(src) == len(dst) == len(cost)
+    ):
+        raise ValueError(
+            "graph src/dst/cost lengths do not match"
+        )
+
+    if not np.issubdtype(src.dtype, np.integer):
+        raise ValueError(
+            f"graph.src must be integer, got {src.dtype}"
+        )
+
+    if not np.issubdtype(dst.dtype, np.integer):
+        raise ValueError(
+            f"graph.dst must be integer, got {dst.dtype}"
+        )
+
+    w = np.exp(
+        -cost.astype(np.float64) / epsilon
+    )
 
     row_sum = np.bincount(
-        graph.src,
+        src,
         weights=w,
         minlength=graph.P,
     )
 
     if np.any(row_sum <= 0):
-        raise ValueError("Graph contains empty transition rows")
+        raise ValueError(
+            "Graph contains empty transition rows"
+        )
 
-    prob = w / row_sum[graph.src]
-
-    return prob
+    return w / row_sum[src]
 
 
 def apply_transition(graph, prob, p):

@@ -62,45 +62,41 @@ def build_local_transport_graph(
     shift_velocity=1.0,
     scale_velocity=None,
 ):
-    scales = np.asarray(scales, dtype=np.float64)
-    J = scales.size
+    scales = physical_scale_values(scales)
+    J = len(scales)
 
     if L <= 0:
-        raise ValueError("L must be positive.")
-
+        raise ValueError("L must be positive")
     if J <= 0:
-        raise ValueError("At least one scale is required.")
-
+        raise ValueError("At least one scale is required")
     if np.any(scales <= 0):
-        raise ValueError("All scales must be positive.")
-
+        raise ValueError("All scales must be positive")
     if shift_radius < 0 or scale_radius < 0:
-        raise ValueError("Radii must be nonnegative.")
-
+        raise ValueError("Radii must be nonnegative")
     if shift_velocity <= 0:
-        raise ValueError("shift_velocity must be positive.")
+        raise ValueError("shift_velocity must be positive")
 
     if scale_velocity is None:
         scale_velocity = median_log_scale_spacing(scales)
 
     if scale_velocity <= 0:
-        raise ValueError("scale_velocity must be positive.")
-
-    src = []
-    dst = []
-    cost = []
+        raise ValueError("scale_velocity must be positive")
 
     log_scales = np.log(scales)
 
+    src = []
+    dst = []
+    costs = []
+
     for n in range(L):
+        n0 = max(0, n - shift_radius)
+        n1 = min(L - 1, n + shift_radius)
+
         for j in range(J):
-            source = state_index(n, j, J)
-
-            n0 = max(0, n - shift_radius)
-            n1 = min(L - 1, n + shift_radius)
-
             j0 = max(0, j - scale_radius)
             j1 = min(J - 1, j + scale_radius)
+
+            source = state_index(n, j, J)
 
             for nn in range(n0, n1 + 1):
                 for jj in range(j0, j1 + 1):
@@ -109,15 +105,33 @@ def build_local_transport_graph(
                     dn = (nn - n) / shift_velocity
 
                     ds = (
-                        log_scales[jj]
-                        - log_scales[j]
+                        log_scales[jj] - log_scales[j]
                     ) / scale_velocity
 
-                    c = dn * dn + ds * ds
+                    c = dn*dn + ds*ds
 
                     src.append(source)
                     dst.append(target)
-                    cost.append(c)
+                    costs.append(c)
+
+    src = np.asarray(src, dtype=np.int64)
+    dst = np.asarray(dst, dtype=np.int64)
+    costs = np.asarray(costs, dtype=np.float64)
+
+    # Defensive consistency checks.
+    P = L * J
+
+    if np.any(src < 0) or np.any(src >= P):
+        raise RuntimeError("Invalid source index")
+
+    if np.any(dst < 0) or np.any(dst >= P):
+        raise RuntimeError("Invalid destination index")
+
+    if not np.all(np.isfinite(costs)):
+        raise RuntimeError("Non-finite graph cost")
+
+    if np.any(costs < 0):
+        raise RuntimeError("Negative graph cost")
 
     return LocalTransportGraph(
         L=int(L),
@@ -127,11 +141,32 @@ def build_local_transport_graph(
         scale_radius=int(scale_radius),
         shift_velocity=float(shift_velocity),
         scale_velocity=float(scale_velocity),
-        src=np.asarray(src, dtype=np.int64),
-        dst=np.asarray(dst, dtype=np.int64),
-        cost=np.asarray(cost, dtype=np.float64),
+        src=src,
+        dst=dst,
+        cost=costs,
     )
 
+def physical_scale_values(scales):
+    scales = np.asarray(scales, dtype=np.float64)
+
+    if scales.ndim == 1:
+        values = scales
+
+    elif scales.ndim == 2 and scales.shape[1] == 2:
+        if np.any(scales[:, 1] == 0):
+            raise ValueError("Scale denominator cannot be zero")
+
+        values = scales[:, 0] / scales[:, 1]
+
+    else:
+        raise ValueError(
+            "scales must be 1-D values or (numerator, denominator) pairs"
+        )
+
+    if np.any(values <= 0):
+        raise ValueError("Physical scales must be positive")
+
+    return values
 
 def transpose_edges(graph):
     return (
