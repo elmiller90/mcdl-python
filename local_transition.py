@@ -1,5 +1,77 @@
 import numpy as np
 
+def regularized_normalization_value_grad(
+    x,
+    grad_p,
+    mass_floor=1e-10,
+    background=None,
+):
+    """
+    Map a gradient with respect to
+
+        p = (x + mass_floor*u) / (sum(x) + mass_floor)
+
+    back to x.
+
+    The background u must be nonnegative and sum to one.
+    """
+    x = np.asarray(x, dtype=np.float64)
+    grad_p = np.asarray(grad_p, dtype=np.float64)
+
+    if x.ndim != 1:
+        raise ValueError("x must be 1-D")
+    if grad_p.shape != x.shape:
+        raise ValueError("grad_p shape must match x")
+    if np.any(x < 0):
+        raise ValueError("x must be nonnegative")
+    if mass_floor <= 0:
+        raise ValueError("mass_floor must be positive")
+
+    if background is None:
+        background = np.full(
+            x.size,
+            1.0 / x.size,
+            dtype=np.float64,
+        )
+    else:
+        background = np.asarray(
+            background,
+            dtype=np.float64,
+        )
+
+        if background.shape != x.shape:
+            raise ValueError(
+                "background shape must match x"
+            )
+        if np.any(background < 0):
+            raise ValueError(
+                "background must be nonnegative"
+            )
+
+        total = float(background.sum())
+
+        if total <= 0:
+            raise ValueError(
+                "background must have positive mass"
+            )
+
+        background = background / total
+
+    mass = float(x.sum())
+    denominator = mass + mass_floor
+
+    p = (
+        x + mass_floor * background
+    ) / denominator
+
+    # J^T grad_p, where
+    #
+    # J = (I - p 1^T) / denominator.
+    grad_x = (
+        grad_p - np.dot(grad_p, p)
+    ) / denominator
+
+    return p, grad_x, mass
 
 def build_transition_kernel(graph, epsilon=0.5):
     if epsilon <= 0:
@@ -253,6 +325,110 @@ def normalized_transition_value_grad(
     diagnostics.update({
         "source_mass": mx,
         "target_mass": my,
+    })
+
+    return value, grad_x, grad_y, diagnostics
+
+def regularized_transition_value_grad(
+    x,
+    y,
+    graph,
+    prob,
+    mass_floor=1e-10,
+    hellinger_delta=1e-12,
+    background=None,
+):
+    """
+    Bidirectional transition penalty with smooth low-mass
+    normalization.
+
+        p = (x + d*u) / (sum(x) + d)
+        q = (y + d*u) / (sum(y) + d)
+
+    This is defined even when x or y has zero total mass.
+    """
+    x = np.asarray(x, dtype=np.float64)
+    y = np.asarray(y, dtype=np.float64)
+
+    if x.ndim != 1 or y.ndim != 1:
+        raise ValueError("x and y must be 1-D")
+    if x.shape != y.shape:
+        raise ValueError("x and y must have equal shape")
+    if np.any(x < 0) or np.any(y < 0):
+        raise ValueError("x and y must be nonnegative")
+    if mass_floor <= 0:
+        raise ValueError("mass_floor must be positive")
+
+    P = x.size
+
+    if background is None:
+        u = np.full(
+            P,
+            1.0 / P,
+            dtype=np.float64,
+        )
+    else:
+        u = np.asarray(
+            background,
+            dtype=np.float64,
+        )
+
+        if u.shape != x.shape:
+            raise ValueError(
+                "background shape must match x"
+            )
+        if np.any(u < 0):
+            raise ValueError(
+                "background must be nonnegative"
+            )
+
+        total = float(u.sum())
+
+        if total <= 0:
+            raise ValueError(
+                "background must have positive mass"
+            )
+
+        u = u / total
+
+    mx = float(x.sum())
+    my = float(y.sum())
+
+    sx = mx + mass_floor
+    sy = my + mass_floor
+
+    p = (
+        x + mass_floor * u
+    ) / sx
+
+    q = (
+        y + mass_floor * u
+    ) / sy
+
+    value, gp, gq, diagnostics = (
+        transition_value_grad(
+            p,
+            q,
+            graph,
+            prob,
+            delta=hellinger_delta,
+        )
+    )
+
+    grad_x = (
+        gp - np.dot(gp, p)
+    ) / sx
+
+    grad_y = (
+        gq - np.dot(gq, q)
+    ) / sy
+
+    diagnostics.update({
+        "source_mass": mx,
+        "target_mass": my,
+        "source_regularized_mass": sx,
+        "target_regularized_mass": sy,
+        "mass_floor": float(mass_floor),
     })
 
     return value, grad_x, grad_y, diagnostics

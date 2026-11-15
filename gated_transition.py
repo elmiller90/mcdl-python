@@ -1,16 +1,28 @@
 import numpy as np
 
-from local_transition import normalized_transition_value_grad
+from local_transition import (
+    regularized_transition_value_grad,
+)
 
 
 def gate(m, mu):
     if mu <= 0:
         raise ValueError("gate_mass must be positive")
-    return m / (m + mu)
+
+    m2 = m * m
+    mu2 = mu * mu
+
+    return m2 / (m2 + mu2)
 
 
 def gate_derivative(m, mu):
-    return mu / (m + mu) ** 2
+    m2 = m * m
+    mu2 = mu * mu
+
+    return (
+        2.0 * m * mu2
+        / (m2 + mu2) ** 2
+    )
 
 
 def frame_to_vector(X, k, t):
@@ -37,34 +49,35 @@ def gated_transition_value_grad(
     graph,
     prob,
     gate_mass=0.05,
-    delta=1e-12,
-    inactive_mass=1e-14,
+    mass_floor=1e-10,
+    hellinger_delta=1e-12,
+    background=None,
 ):
     """
-    Gated bidirectional local-transition regularizer.
+    Smooth gated bidirectional local-transition regularizer.
 
-    X shape: (L,K,J,T), nonnegative.
+    X has shape (L,K,J,T).
 
-    R(X) = sum_{k,t}
-        g(m_kt) g(m_k,t+1)
-        R_trans(x_kt, x_k,t+1)
-
-    Pairwise R_trans acts on normalized coefficient maps.
-
-    Returns
-    -------
-    value : float
-    grad : ndarray, same shape as X
-    diagnostics : dict
+    No hard inactive-mass branch is used. Low-mass frames
+    are regularized using a tiny background distribution,
+    while the smooth gate drives their contribution to zero.
     """
     X = np.asarray(X, dtype=np.float64)
 
     if X.ndim != 4:
-        raise ValueError("X must have shape (L,K,J,T)")
+        raise ValueError(
+            "X must have shape (L,K,J,T)"
+        )
     if np.any(X < 0):
         raise ValueError("X must be nonnegative")
     if gate_mass <= 0:
-        raise ValueError("gate_mass must be positive")
+        raise ValueError(
+            "gate_mass must be positive"
+        )
+    if mass_floor <= 0:
+        raise ValueError(
+            "mass_floor must be positive"
+        )
 
     L, K, J, T = X.shape
 
@@ -73,16 +86,51 @@ def gated_transition_value_grad(
             "X shift/scale dimensions do not match graph"
         )
 
+    P = graph.P
+
+    if background is None:
+        background_vector = np.full(
+            P,
+            1.0 / P,
+            dtype=np.float64,
+        )
+    else:
+        background_vector = np.asarray(
+            background,
+            dtype=np.float64,
+        )
+
+        if background_vector.shape != (P,):
+            raise ValueError(
+                f"background must have shape ({P},)"
+            )
+        if np.any(background_vector < 0):
+            raise ValueError(
+                "background must be nonnegative"
+            )
+
+        total = float(background_vector.sum())
+
+        if total <= 0:
+            raise ValueError(
+                "background must have positive mass"
+            )
+
+        background_vector = (
+            background_vector / total
+        )
+
     grad = np.zeros_like(X)
     value = 0.0
 
     masses = np.zeros((K, T))
-    gates = np.zeros((K, T))
+    frame_gates = np.zeros((K, T))
 
-    pair_value = np.zeros((K, max(T - 1, 0)))
-    pair_weight = np.zeros_like(pair_value)
-    weighted_value = np.zeros_like(pair_value)
-    skipped = np.zeros_like(pair_value, dtype=bool)
+    pair_shape = (K, max(T - 1, 0))
+
+    pair_values = np.zeros(pair_shape)
+    pair_weights = np.zeros(pair_shape)
+    weighted_pair_values = np.zeros(pair_shape)
 
     for k in range(K):
         for t in range(T):
@@ -90,7 +138,10 @@ def gated_transition_value_grad(
             m = float(x.sum())
 
             masses[k, t] = m
-            gates[k, t] = gate(m, gate_mass)
+            frame_gates[k, t] = gate(
+                m,
+                gate_mass,
+            )
 
     for k in range(K):
         for t in range(T - 1):
@@ -100,40 +151,36 @@ def gated_transition_value_grad(
             mx = masses[k, t]
             my = masses[k, t + 1]
 
-            gx_gate = gates[k, t]
-            gy_gate = gates[k, t + 1]
+            gx_gate = frame_gates[k, t]
+            gy_gate = frame_gates[k, t + 1]
 
-            w = gx_gate * gy_gate
-            pair_weight[k, t] = w
+            weight = gx_gate * gy_gate
 
-            # Pairwise normalized penalty is undefined for zero mass.
-            # Its gated limit is zero when either frame is inactive.
-            if mx <= inactive_mass or my <= inactive_mass:
-                skipped[k, t] = True
-                continue
-
-            r, grad_x, grad_y, _ = (
-                normalized_transition_value_grad(
+            pair_value, grad_x, grad_y, _ = (
+                regularized_transition_value_grad(
                     x,
                     y,
                     graph,
                     prob,
-                    delta=delta,
+                    mass_floor=mass_floor,
+                    hellinger_delta=hellinger_delta,
+                    background=background_vector,
                 )
             )
 
-            pair_value[k, t] = r
-            weighted_value[k, t] = w * r
-            value += w * r
+            weighted = weight * pair_value
 
-            # Shape derivative.
-            grad_x = w * grad_x
-            grad_y = w * grad_y
+            pair_values[k, t] = pair_value
+            pair_weights[k, t] = weight
+            weighted_pair_values[k, t] = weighted
 
-            # Gate derivative:
-            # d[w*r]/dx =
-            #   w * dr/dx
-            #   + r * g'(mx)*g(my) * 1.
+            value += weighted
+
+            # Shape contribution.
+            grad_x = weight * grad_x
+            grad_y = weight * grad_y
+
+            # Smooth gate contribution.
             dw_dmx = (
                 gate_derivative(mx, gate_mass)
                 * gy_gate
@@ -144,27 +191,42 @@ def gated_transition_value_grad(
                 * gate_derivative(my, gate_mass)
             )
 
-            grad_x += r * dw_dmx
-            grad_y += r * dw_dmy
+            grad_x += pair_value * dw_dmx
+            grad_y += pair_value * dw_dmy
 
             grad[:, k, :, t] += vector_to_frame(
-                grad_x, L, J
+                grad_x,
+                L,
+                J,
             )
 
             grad[:, k, :, t + 1] += vector_to_frame(
-                grad_y, L, J
+                grad_y,
+                L,
+                J,
             )
 
     diagnostics = {
         "masses": masses,
-        "frame_gates": gates,
-        "pair_weights": pair_weight,
-        "pair_values": pair_value,
-        "weighted_pair_values": weighted_value,
-        "skipped_pairs": skipped,
-        "number_skipped": int(np.count_nonzero(skipped)),
-        "number_pairs": int(K * max(T - 1, 0)),
+        "frame_gates": frame_gates,
+        "pair_weights": pair_weights,
+        "pair_values": pair_values,
+        "weighted_pair_values": weighted_pair_values,
+        "number_pairs": int(
+            K * max(T - 1, 0)
+        ),
+        "mass_floor": float(mass_floor),
         "gate_mass": float(gate_mass),
+        "minimum_pair_weight": (
+            float(pair_weights.min())
+            if pair_weights.size
+            else 0.0
+        ),
+        "maximum_pair_weight": (
+            float(pair_weights.max())
+            if pair_weights.size
+            else 0.0
+        ),
     }
 
     return float(value), grad, diagnostics
