@@ -99,6 +99,7 @@ def solve_log_admm(
     abs_tol=1e-4, rel_tol=1e-3, adaptive_rho=True,
     rho_mu=10.0, rho_tau=2.0, a_min=1e-4,
     continuation_iters=100, a_fraction=0.95, verbose=True,
+    temporal_regularizer=None,
 ):
     X = np.asarray(X0, dtype=np.float64).copy()
     S = np.asarray(S, dtype=np.float64)
@@ -126,6 +127,7 @@ def solve_log_admm(
             X0=X, S=S, Y=Y, U=U, operator=operator,
             rho=rho, lambda2=lambda2, tau=tau,
             maxiter=x_maxiter, ftol=1e-10, gtol=1e-7, maxls=50,
+            temporal_regularizer=temporal_regularizer,
         )
 
         Y_old = Y.copy()
