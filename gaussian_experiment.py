@@ -147,55 +147,67 @@ def make_true_coefficients(
     return X_true, coefficient_positions
 
 
-def add_noise_snr(
-    clean: np.ndarray,
-    snr_db: float,
-    rng: np.random.Generator,
-) -> tuple[np.ndarray, np.ndarray, float]:
-    """
-    Add Gaussian noise with exact realized Frobenius-norm SNR.
+def add_noise_snr(S_clean, snr_db, rng, return_sigma=False):
+    """Add iid Gaussian noise with variance chosen from expected-energy SNR."""
+    S_clean = np.asarray(S_clean, dtype=np.float64)
+    if S_clean.size == 0:
+        raise ValueError("S_clean must not be empty")
+    signal_energy = float(np.sum(S_clean * S_clean))
+    if signal_energy <= 0:
+        raise ValueError("S_clean must have positive energy")
+    nobs = S_clean.size
+    snr_linear = 10.0 ** (float(snr_db) / 10.0)
+    sigma2 = signal_energy / (nobs * snr_linear)
+    sigma = float(np.sqrt(sigma2))
+    noise = rng.normal(0.0, sigma, size=S_clean.shape)
+    S_noisy = S_clean + noise
+    realized_noise_energy = float(np.sum(noise * noise))
+    achieved_snr = float(10.0 * np.log10(signal_energy / realized_noise_energy))
+    if return_sigma:
+        return S_noisy, noise, achieved_snr, sigma
+    return S_noisy, noise, achieved_snr
 
-        SNR_dB = 20 log10(||clean||_F / ||noise||_F)
-    """
-    clean = np.asarray(
-        clean,
-        dtype=np.float64,
+
+def expected_noise_energy(data, sigma):
+    """Expected 0.5*||N||_F^2 for iid N(0,sigma^2) noise."""
+    data = np.asarray(data)
+    sigma = float(sigma)
+    if sigma < 0:
+        raise ValueError("sigma must be nonnegative")
+    return float(0.5 * data.size * sigma**2)
+
+
+def realized_noise_energy(noise):
+    """Realized 0.5*||N||_F^2; diagnostic only, not for selection."""
+    noise = np.asarray(noise, dtype=np.float64)
+    return float(0.5 * np.sum(noise * noise))
+
+
+def expected_noise_energy(data, sigma):
+    """Expected 0.5*||noise||_F^2 for iid N(0,sigma^2) noise."""
+    if sigma < 0:
+        raise ValueError("sigma must be nonnegative")
+
+    return 0.5 * np.asarray(data).size * sigma**2
+
+
+def realized_noise_energy(noise):
+    """Diagnostic only; do not use for parameter selection."""
+    noise = np.asarray(noise, dtype=np.float64)
+    return 0.5 * np.sum(noise * noise)
+
+def sigma_for_snr(S_clean, snr_db):
+    S_clean = np.asarray(S_clean, dtype=np.float64)
+
+    signal_energy = np.sum(S_clean * S_clean)
+    nobs = S_clean.size
+
+    sigma2 = (
+        signal_energy
+        / (nobs * 10.0**(snr_db / 10.0))
     )
 
-    clean_norm = np.linalg.norm(clean)
-
-    if clean_norm == 0:
-        raise ValueError(
-            "Cannot add SNR-controlled noise "
-            "to a zero signal"
-        )
-
-    noise = rng.normal(
-        size=clean.shape
-    )
-
-    noise_norm = np.linalg.norm(noise)
-
-    if noise_norm == 0:
-        raise RuntimeError(
-            "Generated a zero noise realization"
-        )
-
-    target_noise_norm = (
-        clean_norm
-        / (10.0 ** (snr_db / 20.0))
-    )
-
-    noise *= target_noise_norm / noise_norm
-
-    noisy = clean + noise
-
-    achieved_snr_db = 20.0 * np.log10(
-        clean_norm / np.linalg.norm(noise)
-    )
-
-    return noisy, noise, achieved_snr_db
-
+    return float(np.sqrt(sigma2))
 
 def relative_error(
     estimate: np.ndarray,

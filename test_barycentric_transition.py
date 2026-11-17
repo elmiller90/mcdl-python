@@ -13,7 +13,7 @@ SCALES = [
 L, K, J, T = 18, 2, 5, 6
 GATE_MASS = 0.05
 MASS_FLOOR = 1e-10
-
+SPREAD_WEIGHT = 1.0
 
 def make_args():
     return {
@@ -32,14 +32,14 @@ def gradient_test():
     D /= np.linalg.norm(D)
 
     value, grad, d = barycentric_transition_value_grad(
-        X, **make_args()
+        X, spread_weight=SPREAD_WEIGHT, **make_args()
     )
 
     analytic = float(np.sum(grad * D))
 
     def fun(h):
         return barycentric_transition_value_grad(
-            X + h * D, **make_args()
+            X + h * D, spread_weight=SPREAD_WEIGHT, **make_args()
         )[0]
 
     print()
@@ -157,12 +157,61 @@ def no_diffusion_test():
     print(f"expected: {expected:.8e}")
     print("no diffusion geometry: PASS")
 
+def spread_test():
+    args = make_args()
+
+    # One-sparse frame.
+    X1 = np.zeros((L, 1, J, 1))
+    X1[8, 0, 2, 0] = 1.0
+
+    _, _, d1 = barycentric_transition_value_grad(
+        X1,
+        spread_weight=1.0,
+        **args,
+    )
+
+    # Equal mixture of two adjacent scales.
+    X2 = np.zeros((L, 1, J, 1))
+    X2[8, 0, 1, 0] = 0.5
+    X2[8, 0, 2, 0] = 0.5
+
+    _, _, d2 = barycentric_transition_value_grad(
+        X2,
+        spread_weight=1.0,
+        **args,
+    )
+
+    print()
+    print("Within-frame spread")
+    print("-------------------")
+    print(
+        f"one sparse: "
+        f"{d1['frame_spread'][0,0]:.8e}"
+    )
+    print(
+        f"two-scale mixture: "
+        f"{d2['frame_spread'][0,0]:.8e}"
+    )
+
+    assert np.isclose(
+        d1["frame_spread"][0, 0],
+        0.0,
+        atol=1e-8,
+    )
+
+    assert (
+        d2["frame_spread"][0, 0]
+        > 0
+    )
+
+    print("spread geometry: PASS")
 
 if __name__ == "__main__":
     gradient_test()
     path_geometry_test()
     stationary_track_test()
     no_diffusion_test()
+    spread_test()
 
     print()
     print("ALL BARYCENTRIC TRANSITION TESTS PASSED")

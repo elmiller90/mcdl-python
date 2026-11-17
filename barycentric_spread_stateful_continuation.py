@@ -64,7 +64,7 @@ def callback(beta, shifts, scales):
 
 
 def solve_beta(beta, state0, Xbase, A, Snoisy, Sclean, Xtrue,
-               noise_target, shifts, scales):
+               noise_target_expected, shifts, scales):
     reg = callback(beta, shifts, scales)
     start = time.perf_counter()
     X, Y, U, info = solve_log_admm_stateful(
@@ -92,7 +92,7 @@ def solve_beta(beta, state0, Xbase, A, Snoisy, Sclean, Xtrue,
         "beta": beta, "X": X, "Y": Y, "U": U,
         "state": info["state"], "converged": info["converged"],
         "iterations": info["iterations"], "nz": nz,
-        "nz_per_frame": nz_frame, "discrepancy": data / noise_target,
+        "nz_per_frame": nz_frame, "discrepancy": data / noise_target_expected,
         "xerr": relative_error(Y, Xtrue),
         "snr": reconstruction_snr_db(Sclean, Shat),
         "joint": joint, "positions": pos, "scales": sc,
@@ -138,8 +138,22 @@ def main():
     )
     Xtrue = make_truth(A)
     Sclean = A.forward(Xtrue)
-    Snoisy, noise, snr = add_noise_snr(Sclean, SNR_DB, rng)
-    noise_target = 0.5 * np.sum(noise * noise)
+
+    Snoisy, noise, snr, sigma = add_noise_snr(
+        Sclean,
+        SNR_DB,
+        rng,
+        return_sigma=True,
+    )
+
+    noise_target_expected = float(
+        0.5 * Snoisy.size * sigma**2
+    )
+
+    noise_target_realized = float(
+        0.5 * np.sum(noise * noise)
+    )
+
     scales = physical_scale_values(SCALES)
     shifts = np.arange(A.L, dtype=float)
     Xbase = np.maximum(A.adjoint(Snoisy, structured=True), 0.0)
@@ -150,7 +164,7 @@ def main():
     print("------------------------------")
     print(f"SNR: {snr:.2f} dB  lambda_s: {LAMBDA_S}  lambda_t: {LAMBDA_T}")
 
-    common = (A, Snoisy, Sclean, Xtrue, noise_target, shifts, scales)
+    common = (A, Snoisy, Sclean, Xtrue, noise_target_expected, shifts, scales)
     forward = run_path("Forward path", BETAS, None, Xbase, *common)
     reverse = run_path(
         "Reverse path", list(reversed(BETAS)),

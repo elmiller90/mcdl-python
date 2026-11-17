@@ -230,3 +230,26 @@ def gated_transition_value_grad(
     }
 
     return float(value), grad, diagnostics
+
+def make_gated_transition_regularizer(
+    graph,
+    prob,
+    gate_mass=0.05,
+    mass_floor=1e-10,
+    hellinger_delta=1e-12,
+    background=None,
+):
+    def regularizer(X):
+        value, grad, _ = gated_transition_value_grad(
+            X,
+            graph,
+            prob,
+            gate_mass=gate_mass,
+            mass_floor=mass_floor,
+            hellinger_delta=hellinger_delta,
+            background=background,
+        )
+
+        return value, grad
+
+    return regularizer

@@ -30,3 +30,8 @@ output/
 # OS files
 .DS_Store
 Thumbs.db
+
+# Miscellaneous
+*.bak_expected_noise
+__pycache__/
+*.pyc
