@@ -1,0 +1,905 @@
+---
+title: "Sparse Barycentric Temporal Regularization"
+subtitle: "Finite-Duration Trajectories in Nonnegative Multiscale Convolutional Dictionary Learning"
+author: "Eric L. Miller"
+date: last-modified
+toc: true
+toc-depth: 3
+number-sections: true
+crossrefs-hover: true
+format:
+  html:
+    theme: cosmo
+    toc: true
+    toc-location: left
+    code-fold: true
+    html-math-method: mathjax
+  pdf:
+    documentclass: scrartcl
+    geometry:
+      - margin=1in
+    keep-tex: true
+execute:
+  echo: false
+  warning: false
+  error: false
+  freeze: auto
+---
+
+::: {.callout-note title="Current project state"}
+The multiscale coefficient-recovery pipeline, logarithmic sparsity model, barycentric temporal regularizer, analytical gradients, full-state continuation, and automatic parameter-selection prototype have been numerically validated.
+
+A multi-SNR Monte Carlo study of adaptive parameter selection is currently running. Dictionary learning is the next planned phase. Its mathematical structure has been recovered from the original MCDL formulation, but its Python implementation has not yet begun.
+:::
+
+# Abstract
+
+We develop a temporal regularization framework for nonnegative multiscale convolutional dictionary learning (MCDL) in which sparse coefficient representations evolve along finite-duration curves in joint shift--scale--time space. Each active frame should contain only one or a small number of significant coefficients, those coefficients should move smoothly through physical shift and scale coordinates, and a trajectory should be free to appear and disappear without being forced to persist throughout the observation interval.
+
+The model combines a nonconvex logarithmic sparsity penalty with a barycentric temporal regularizer consisting of a trajectory-motion term and a gated within-frame spread term. A smooth squared activity gate satisfies both $g(0)=0$ and $g'(0)=0$, permitting natural track birth and death. All temporal components possess explicit gradients and require no inner transport optimization.
+
+The optimization problem remains nonconvex. Numerical experiments show that full-state ADMM continuation is important for tracking favorable sparse branches. A hierarchical automatic parameter-selection procedure based on expected-noise discrepancy, stable parameter regions, and L-curve ideas is developed and evaluated against a post-hoc synthetic oracle. The next phase extends the validated fixed-dictionary coefficient estimator to joint dictionary learning with explicit scale-normalization variables.
+
+# Problem formulation
+
+## Multiscale coefficient model
+
+Let
+
+$$
+X(n,k,j,t)\ge 0
+$$
+
+denote the coefficient tensor, where $n$ is shift, $k$ is dictionary-atom index, $j$ is scale, and $t$ is time. The data model is
+
+$$
+S=\mathcal A_DX+N,
+$$ {#eq-forward}
+
+where $D$ denotes the base dictionary and $N$ is additive noise.
+
+For fixed $D$, coefficient recovery solves
+
+$$
+\widehat X
+=
+\arg\min_{X\ge0}
+\left\{
+\frac12\|\mathcal A_DX-S\|_F^2
++\lambda_SR_{\log}(X;a)
++\lambda_TR_T(X)
+\right\}.
+$$ {#eq-main}
+
+The data-fidelity term is
+
+$$
+D(X)=\frac12\|\mathcal A_DX-S\|_F^2.
+$$ {#eq-data}
+
+## Desired trajectory geometry
+
+The desired representation has four properties:
+
+1. **Sparse cross-section:** each active frame contains very few significant coefficients.
+2. **Smooth centerline:** the active location evolves smoothly through shift--scale space.
+3. **Compactness:** smoothness is not achieved by spreading mass over neighboring coefficients.
+4. **Finite duration:** a trajectory may exist only over a contiguous interval of frames.
+
+Thus the target representation is a small collection of finite curves embedded in $(n,\log s,t)$.
+
+# Logarithmic sparsity regularization
+
+The nonconvex logarithmic penalty is
+
+$$
+R_{\log}(X;a)
+=
+\frac1a\sum_i\log(1+aX_i),
+\qquad X_i\ge0.
+$$ {#eq-logpen}
+
+For small $a$,
+
+$$
+\frac1a\log(1+ax)\to x,
+$$
+
+so the model approaches nonnegative $\ell_1$ regularization. Increasing $a$ produces a more strongly sparsity-promoting concave penalty with reduced bias on large coefficients.
+
+Continuation evolves $a$ according to
+
+$$
+a_r
+=
+a_{\min}
+\left(\frac{a_{\max}}{a_{\min}}\right)^{\min(r,R_c)/R_c},
+$$ {#eq-a-continuation}
+
+where
+
+$$
+a_{\min}=10^{-4},
+\qquad
+a_{\max}=\frac{0.95}{\lambda_S}.
+$$
+
+# Scaled dictionary atoms
+
+Let $d_k\in\mathbb R^M$ be base atom $k$ and let $M_j$ denote the linear resampling operator for physical scale $s_j$. The unnormalized scaled atom is
+
+$$
+\widetilde d_{k,j}=M_jd_k.
+$$ {#eq-resampled-atom}
+
+The original MCDL formulation introduces an explicit scale-normalization coefficient
+
+$$
+\alpha_{k,j}=\frac1{\|M_jd_k\|_2},
+$$ {#eq-alpha}
+
+so that
+
+$$
+d_{k,j}=\alpha_{k,j}M_jd_k,
+\qquad
+\|d_{k,j}\|_2=1.
+$$ {#eq-scaled-atom}
+
+For fixed-dictionary coefficient recovery, computing normalized scaled atoms directly is equivalent to using fixed $\alpha_{k,j}$. During dictionary learning, however, $\alpha$ is held fixed while updating the base dictionary, preserving linearity in $D$.
+
+Scale is represented geometrically by
+
+$$
+\xi_j=\log s_j.
+$$ {#eq-log-scale}
+
+For the current five-scale model,
+
+$$
+s=\left[1,\frac45,\frac34,\frac23,\frac12\right].
+$$
+
+# Why direct frame smoothing is undesirable
+
+A conventional penalty such as
+
+$$
+\sum_t\|X_{t+1}-X_t\|_F^2
+$$
+
+encourages neighboring coefficient images to resemble one another pointwise. A translating one-sparse coefficient may have a large pointwise difference despite defining a perfectly smooth physical trajectory. Conversely, pointwise smoothing can favor diffuse clouds that overlap over time. Temporal regularization should therefore act on trajectory geometry rather than directly smoothing full coefficient frames.
+
+# Alternative temporal models considered
+
+## Soft-minimum local transitions
+
+An earlier model used a soft minimum over local shift--scale transitions. It demonstrated that local temporal coupling can resolve trajectory ambiguities while maintaining sparsity, but its parameter had an indirect geometric interpretation and stable solutions occupied broad nonunique plateaus.
+
+## Local optimal transport
+
+Optimal transport represents coefficient mass moving through shift--scale space. A local ground cost was defined by
+
+$$
+C((n,j),(n',j'))
+=
+\left(\frac{n'-n}{v_n}\right)^2
++
+\left(\frac{\log s_{j'}-\log s_j}{v_s}\right)^2.
+$$ {#eq-ground-cost}
+
+Sparse and log-domain Sinkhorn implementations were validated. However, sharp transport geometry required thousands of inner iterations in smooth test cases. The nested computation
+
+$$
+\text{ADMM}\to\text{L-BFGS-B}\to\text{Sinkhorn}
+$$
+
+was therefore computationally unsuitable.
+
+## Markov/Hellinger transition model
+
+A local row-stochastic transition kernel replaced transport by comparing $p_{t+1}$ with $K^Tp_t$. Although computationally cheaper and gradient-valid, a one-sparse source generates a diffuse Markov prediction. Even very small temporal weights caused substantial support proliferation. The model was rejected because it conflicted directly with sparse-curve recovery.
+
+# Barycentric temporal representation
+
+## Frame mass and normalized distribution
+
+For atom $k$ and frame $t$, define
+
+$$
+m_{k,t}=\sum_{n,j}X(n,k,j,t).
+$$ {#eq-mass}
+
+Introduce the uniform background $u_{n,j}=1/(LJ)$ and define
+
+$$
+p_{n,j,k,t}
+=
+\frac{X(n,k,j,t)+\delta u_{n,j}}{m_{k,t}+\delta},
+$$ {#eq-normalized-frame}
+
+with $\delta=10^{-10}$. Then $\sum_{n,j}p_{n,j,k,t}=1$ even for an inactive frame.
+
+## Barycentric coordinates
+
+The position and log-scale barycenters are
+
+$$
+\bar n_{k,t}=\sum_{n,j}p_{n,j,k,t}n,
+$$ {#eq-position-barycenter}
+
+and
+
+$$
+\bar\xi_{k,t}=\sum_{n,j}p_{n,j,k,t}\log s_j.
+$$ {#eq-scale-barycenter}
+
+The pair $z_{k,t}=(\bar n_{k,t},\bar\xi_{k,t})$ describes the trajectory centerline.
+
+# Smooth activity gating
+
+The final gate is
+
+$$
+g(m)=\frac{m^2}{m^2+\mu^2},
+$$ {#eq-gate}
+
+with derivative
+
+$$
+g'(m)=\frac{2m\mu^2}{(m^2+\mu^2)^2}.
+$$ {#eq-gate-derivative}
+
+Hence
+
+$$
+g(0)=0,
+\qquad
+g'(0)=0.
+$$ {#eq-gate-zero}
+
+With $\mu=0.05$, numerical background mass is effectively inactive while a unit-amplitude trajectory is almost fully regularized.
+
+# Barycentric motion regularization
+
+Let $v_n=1$ and let $v_s$ be a characteristic adjacent spacing in log scale. Define
+
+$$
+w_{k,t}=g(m_{k,t})g(m_{k,t+1}).
+$$ {#eq-pair-gate}
+
+The pairwise motion energy is
+
+$$
+E_{k,t}^{\mathrm{motion}}
+=
+\frac{(\bar n_{k,t+1}-\bar n_{k,t})^2}{v_n^2}
++
+\frac{(\bar\xi_{k,t+1}-\bar\xi_{k,t})^2}{v_s^2}.
+$$ {#eq-pair-motion}
+
+The complete motion penalty is
+
+$$
+R_{\mathrm{motion}}(X)
+=
+\sum_k\sum_{t=0}^{T-2}w_{k,t}E_{k,t}^{\mathrm{motion}}.
+$$ {#eq-motion}
+
+# Within-frame spread regularization
+
+First moments cannot distinguish a compact coefficient from a mixture having the same barycenter. Define normalized coordinates
+
+$$
+q_{n,j}
+=
+\begin{bmatrix}
+n/v_n\\
+\log(s_j)/v_s
+\end{bmatrix}.
+$$ {#eq-normalized-coordinate}
+
+For a normalized frame distribution, let $\bar q=\sum_ip_iq_i$. The within-frame spread is
+
+$$
+V=\sum_ip_i\|q_i-\bar q\|_2^2
+=\mathbb E_p[\|q\|_2^2]-\|\mathbb E_p[q]\|_2^2.
+$$ {#eq-spread}
+
+The gated spread regularizer is
+
+$$
+R_{\mathrm{spread}}(X)=\sum_k\sum_tg(m_{k,t})V_{k,t}.
+$$ {#eq-spread-regularizer}
+
+A one-sparse active frame has essentially zero spread, whereas adjacent-scale mixtures have positive spread.
+
+# Complete temporal regularizer
+
+The proposed temporal penalty is
+
+$$
+\boxed{
+R_T(X)=R_{\mathrm{motion}}(X)+\beta_VR_{\mathrm{spread}}(X)
+}.
+$$ {#eq-complete-temporal}
+
+| Component | Role |
+|---|---|
+| $R_{\log}$ | Sparse frame cross-sections |
+| $R_{\mathrm{motion}}$ | Smooth trajectory centerlines |
+| $R_{\mathrm{spread}}$ | Suppression of barycentrically favorable mixtures |
+| $g(m)$ | Smooth track birth and death |
+
+# Gradient derivation
+
+## Normalization Jacobian
+
+For one frame, write
+
+$$
+p_i=\frac{x_i+\delta u_i}{m+\delta},
+\qquad m=\sum_ix_i.
+$$
+
+Then
+
+$$
+\frac{\partial p_i}{\partial x_\ell}
+=
+\frac{\delta_{i\ell}-p_i}{m+\delta}.
+$$ {#eq-normalization-jacobian}
+
+For a scalar function $F(p)$ with gradient $g_p=\nabla_pF$,
+
+$$
+\nabla_xF
+=
+\frac{g_p-\langle g_p,p\rangle\mathbf1}{m+\delta}.
+$$ {#eq-normalization-gradient}
+
+## Barycenter derivative
+
+For coordinate vector $c$ and barycenter $\bar c=\sum_ip_ic_i$,
+
+$$
+\nabla_x\bar c=\frac{c-\bar c\mathbf1}{m+\delta}.
+$$ {#eq-barycenter-gradient}
+
+## Motion derivative
+
+Let
+
+$$
+\Delta n=\bar n_{t+1}-\bar n_t,
+\qquad
+\Delta\xi=\bar\xi_{t+1}-\bar\xi_t.
+$$
+
+Then
+
+$$
+\frac{\partial E_t}{\partial\bar n_t}=-\frac{2\Delta n}{v_n^2},
+\qquad
+\frac{\partial E_t}{\partial\bar n_{t+1}}=\frac{2\Delta n}{v_n^2},
+$$
+
+with analogous expressions for log scale. Gate derivatives contribute because $w_t=g(m_t)g(m_{t+1})$.
+
+## Spread derivative
+
+Using the moment form of $V$,
+
+$$
+\frac{\partial V}{\partial p_i}=\|q_i\|_2^2-2q_i^T\bar q.
+$$ {#eq-spread-p-gradient}
+
+The gated derivative is
+
+$$
+\nabla_x[g(m)V]=g(m)\nabla_xV+Vg'(m)\mathbf1.
+$$ {#eq-gated-spread-gradient}
+
+# Numerical optimization
+
+## Coefficient ADMM
+
+The smooth update is
+
+$$
+X^{r+1}
+=
+\arg\min_{X\ge0}
+\left\{
+\frac12\|\mathcal AX-S\|_F^2
++\lambda_TR_T(X)
++\frac\rho2\|X-Y^r+U^r\|_F^2
+\right\},
+$$ {#eq-x-update}
+
+solved by L-BFGS-B. The sparse update is
+
+$$
+Y^{r+1}
+=
+\operatorname{prox}_{(\lambda_S/\rho)R_{\log}}(X^{r+1}+U^r),
+$$ {#eq-y-update}
+
+followed by
+
+$$
+U^{r+1}=U^r+X^{r+1}-Y^{r+1}.
+$$ {#eq-u-update}
+
+## Full-state continuation
+
+The complete problem is nonconvex. Continuation therefore propagates
+
+$$
+\boxed{(X,Y,U,\rho,a)}
+$$ {#eq-state}
+
+between nearby parameter values. Cold-start compatibility tests show that the stateful implementation reproduces the original solver exactly when no warm start is supplied.
+
+# Numerical validation
+
+Analytical gradients were checked by centered directional differences,
+
+$$
+d_{\mathrm{FD}}(h)=\frac{F(X+hD)-F(X-hD)}{2h},
+$$ {#eq-finite-difference}
+
+against $d_{\mathrm{an}}=\langle\nabla F(X),D\rangle$. Relative errors for the complete motion-plus-spread regularizer were observed near $10^{-11}$--$10^{-9}$ in the useful finite-difference regime.
+
+# Finite-duration benchmark
+
+A 12-frame benchmark uses activity
+
+$$
+[0,0,1,1,1,1,1,1,1,1,0,0],
+$$
+
+positions
+
+$$
+[28,29,30,31,32,33,34,35],
+$$
+
+and scale indices
+
+$$
+[0,1,2,3,3,2,1,0].
+$$
+
+Validated experiments recovered the exact activity interval with unit precision and recall, zero onset and offset error, and no interior gaps. Full-state continuation exposed an exact one-coefficient-per-active-frame branch that was obscured by independent cold starts.
+
+# Noise model and discrepancy principle
+
+Noise is generated as
+
+$$
+N_i\overset{\mathrm{iid}}{\sim}\mathcal N(0,\sigma^2).
+$$ {#eq-noise-model}
+
+For requested SNR $\gamma$,
+
+$$
+\sigma^2
+=
+\frac{\|S_{\mathrm{clean}}\|_F^2}{N_{\mathrm{obs}}10^{\gamma/10}}.
+$$ {#eq-noise-variance}
+
+The selection target is expected noise energy,
+
+$$
+D_{\mathrm{exp}}=\frac12N_{\mathrm{obs}}\sigma^2,
+$$ {#eq-expected-discrepancy}
+
+and
+
+$$
+r_D(\theta)=\frac{D(X_\theta)}{D_{\mathrm{exp}}}.
+$$ {#eq-discrepancy-ratio}
+
+The realized noise energy is retained only for post-hoc diagnostics.
+
+Under the Gaussian model,
+
+$$
+\frac{\|N\|_F^2}{\sigma^2}\sim\chi^2_{N_{\mathrm{obs}}},
+$$ {#eq-chi-square}
+
+so the relative standard deviation of realized energy is $\sqrt{2/N_{\mathrm{obs}}}$.
+
+# Automatic parameter selection
+
+The parameters $\lambda_S$, $\lambda_T$, and $\beta_V$ are selected hierarchically.
+
+## Stage A: sparsity strength
+
+Set $\lambda_T=\beta_V=0$ and sweep $\lambda_S$. Record residual, log penalty, and support. Retain discrepancy-consistent candidates and form an L-curve in $(\log D,\log R_{\log})$.
+
+## Stage B: motion strength
+
+For retained sparsity candidates, increase $\lambda_T$ with full-state continuation. Record residual, motion energy, support, activity, and dominant trajectory.
+
+## Stage C: spread strength
+
+For retained $(\lambda_S,\lambda_T)$ pairs, continue over $\beta_V$. Identify regions in which mixed supports collapse while discrepancy and trajectory remain stable.
+
+## Stability selector
+
+Nearby feasible parameter points are grouped by stable support, activity, position path, and scale path. The selector chooses an interior point of the largest stable region.
+
+## L-curve selector
+
+For three consecutive tradeoff points $a,b,c\in\mathbb R^2$, discrete curvature is
+
+$$
+\kappa
+=
+\frac{2|\det(b-a,c-a)|}{\|b-a\|_2\|c-b\|_2\|c-a\|_2}.
+$$ {#eq-discrete-curvature}
+
+The maximal-curvature interior point determines the nested L-curve selection.
+
+# Single-realization adaptive result
+
+In a representative approximately 14 dB experiment, the stability and L-curve selectors agreed on
+
+$$
+\lambda_S=0.15,
+\qquad
+\lambda_T=3\times10^{-5},
+\qquad
+\beta_V=0.10.
+$$
+
+The selected reconstruction had eight significant coefficients, expected-noise discrepancy approximately $0.994$, exact trajectory recovery, and post-hoc coefficient error approximately $0.0254$. The searched synthetic oracle achieved coefficient error approximately $0.0196$.
+
+# Monte Carlo methodology
+
+For each requested SNR and trial:
+
+1. Generate a new independent Gaussian noise realization.
+2. Compute the expected-noise discrepancy target.
+3. Run all three selection stages from scratch.
+4. Apply the stability selector.
+5. Apply the L-curve selector.
+6. Reveal truth only for post-hoc assessment.
+7. Compute the searched synthetic oracle.
+
+The initial study uses
+
+$$
+\mathrm{SNR}\in\{20,17,14,11,8\}\ \mathrm{dB}
+$$
+
+with 10 trials per SNR. The original MATLAB study used 100 noise realizations per SNR; the present 10-trial study is a development-scale experiment that may later be expanded.
+
+Metrics include exact support and trajectory rates, activity F1, position and scale accuracy, coefficient-error median and interquartile range, selected-parameter distributions, selector agreement, and the oracle error ratio
+
+$$
+\rho_{\mathrm{oracle}}
+=
+\frac{E_X(\widehat\theta)}{E_X(\theta_{\mathrm{oracle}})}.
+$$ {#eq-oracle-ratio}
+
+# Scale-confusion diagnostic
+
+At a fixed position, each scale is fit with one nonnegative coefficient. For scale atom $d_{t,j}$,
+
+$$
+\widehat a_{t,j}
+=
+\max\left(0,\frac{\langle d_{t,j},S_t\rangle}{\|d_{t,j}\|_2^2}\right),
+$$ {#eq-single-scale-amplitude}
+
+and
+
+$$
+E_{t,j}=\frac12\|S_t-\widehat a_{t,j}d_{t,j}\|_2^2.
+$$ {#eq-single-scale-energy}
+
+The gap between the best and second-best energies quantifies local scale ambiguity.
+
+# Separation of coefficient and dictionary subproblems
+
+For fixed $D$, @eq-main defines coefficient recovery. For fixed $X$ and $\alpha$, define the linear dictionary operator
+
+$$
+(\mathcal B_{X,\alpha}D)_t
+=
+\sum_{k,j}(\alpha_{k,j}M_jd_k)*x_{k,j,t}.
+$$ {#eq-dictionary-operator}
+
+Because $X$ and $\alpha$ are fixed, $D\mapsto\mathcal B_{X,\alpha}D$ is linear. The coefficients $\alpha$ must not be differentiated implicitly through the dictionary update; they are recomputed separately after dictionary projection.
+
+# Paired evaluation of temporal regularization
+
+## Scientific question
+
+The principal ablation study compares the proposed temporal model with a sparsity-only estimator. The purpose is to determine whether barycentric motion and spread regularization improve recovery beyond what can be achieved by adaptive logarithmic sparsity alone.
+
+The comparison is paired: both estimators use the identical clean signal, SNR, Gaussian noise realization, forward operator, and coefficient initialization. Each estimator selects its own regularization parameters using observable quantities only.
+
+## Sparsity-only baseline
+
+The non-temporal estimator is
+
+$$
+\widehat X_0
+=
+\arg\min_{X\ge0}
+\left\{
+\frac12\|\mathcal A_DX-S\|_F^2
++
+\lambda_SR_{\log}(X)
+\right\},
+$$ {#eq-nontemporal-estimator}
+
+with $\lambda_T=0$ and $\beta_V=0$. The parameter $\lambda_S$ is selected independently for each realization using the same Stage-A expected-discrepancy and L-curve information used by the full hierarchical selector.
+
+## Temporally regularized estimator
+
+The proposed estimator is
+
+$$
+\widehat X_T
+=
+\arg\min_{X\ge0}
+\left\{
+\frac12\|\mathcal A_DX-S\|_F^2
++
+\lambda_SR_{\log}(X)
++
+\lambda_T\left[R_{\mathrm{motion}}(X)+\beta_VR_{\mathrm{spread}}(X)\right]
+\right\}.
+$$ {#eq-temporal-estimator}
+
+The triple $(\lambda_S,\lambda_T,\beta_V)$ is selected independently for every realization by the established hierarchical stability or nested L-curve selector.
+
+## Fairness of the comparison
+
+The baseline is not evaluated with fixed or manually chosen parameters. It is adaptively tuned on every dataset, just as the temporal estimator is. Consequently, any observed difference reflects the temporal model and its automatic selection procedure rather than unequal tuning effort.
+
+The existing Stage-A candidates from each completed Monte Carlo trial are exactly the required non-temporal candidate set. Reusing them also guarantees that the comparison uses the same noise realization and avoids additional numerical variation.
+
+## Paired performance measures
+
+For trial $r$, define the coefficient-error improvement
+
+$$
+\Delta E_X^{(r)}
+=
+E_{X,0}^{(r)}-E_{X,T}^{(r)}.
+$$ {#eq-paired-xerr}
+
+Positive $\Delta E_X^{(r)}$ indicates improvement from temporal regularization. The scale-accuracy improvement is
+
+$$
+\Delta A_{\mathrm{scale}}^{(r)}
+=
+A_{\mathrm{scale},T}^{(r)}-A_{\mathrm{scale},0}^{(r)}.
+$$ {#eq-paired-scale}
+
+At each SNR, the analysis reports:
+
+- median coefficient error for both methods;
+- median paired coefficient-error improvement;
+- fraction of trials in which temporal regularization lowers coefficient error;
+- exact support and exact trajectory rates;
+- mean position and scale accuracy;
+- paired exact-recovery transitions.
+
+The exact-recovery transition table is
+
+| Baseline result | Temporal result | Interpretation |
+|---|---|---|
+| Incorrect | Incorrect | Neither method recovers the trajectory |
+| Incorrect | Exact | Temporal regularization fixes the baseline |
+| Exact | Incorrect | Temporal regularization breaks a correct baseline |
+| Exact | Exact | Both methods recover the trajectory |
+
+## Statistical analysis
+
+Coefficient errors are compared using a paired one-sided Wilcoxon signed-rank test with alternative hypothesis
+
+$$
+E_{X,T}<E_{X,0}.
+$$
+
+Exact-trajectory outcomes are compared using an exact one-sided McNemar test. The informative discordant counts are the number of trials that temporal regularization fixes and the number that it breaks.
+
+Because the development study contains only 10 trials per SNR, effect sizes, paired counts, and confidence intervals are emphasized over isolated $p$-values. The original MATLAB study used 100 realizations per SNR; the experiment can be enlarged if the development results justify a final publication-scale study.
+
+## Separating model benefit from parameter-selection benefit
+
+Synthetic oracle comparisons are retained for both candidate families. Let
+
+$$
+E_{X,0}^*
+=
+\min_{\lambda_S}E_X,
+$$
+
+and
+
+$$
+E_{X,T}^*
+=
+\min_{\lambda_S,\lambda_T,\beta_V}E_X.
+$$
+
+If $E_{X,T}^*<E_{X,0}^*$, the temporal model adds representational value independent of automatic selection. If the temporal oracle improves but the adaptive temporal selector does not, the limitation lies in parameter selection. If neither temporal estimator improves, the realization provides no evidence of temporal benefit within the searched candidate family.
+
+# Expected interpretation
+
+The temporal prior is expected to provide little visible benefit at very high SNR, where the data already distinguish the trajectory. Its strongest effect is expected in the transition regime, where individual frames contain ambiguous neighboring scales but the complete path remains temporally coherent. At very low SNR, temporal regularization may improve average scale accuracy without recovering every exact discrete scale.
+
+A scientifically useful result need not show exact recovery at all SNRs. The central claim is instead that temporal regularization extends the reliable-recovery regime, improves paired structural metrics, or reduces error relative to a fairly and independently tuned non-temporal estimator.
+
+# Paired-comparison results
+
+<!-- Replace this callout after paired_temporal_comparison.json has been generated. -->
+
+::: {.callout-note title="Result status"}
+The paired temporal-versus-nontemporal analysis is pending. Results will be inserted from `results/barycentric_monte_carlo/paired_temporal_comparison.json`.
+:::
+
+## Oracle comparison: model benefit independent of parameter selection
+
+To distinguish the intrinsic value of temporal regularization from the performance of the automatic parameter selectors, a second paired comparison was performed using synthetic coefficient error to select the best candidate within each model family.
+
+For the non\-temporal family,
+
+E\_\{X,0\}^\{\*\}
+
+=
+
+\\min\_\{\\lambda\_S\}
+
+E\_X(\\lambda\_S,\\lambda\_T=0).For the temporal family,
+
+E\_\{X,T\}^\{\*\}
+
+=
+
+\\min\_\{\\lambda\_S,\\lambda\_T,\\beta\_V\}
+
+E\_X(\\lambda\_S,\\lambda\_T,\\beta\_V).Because the temporal candidate family contains $\\lambda\_T=0$, it includes the non\-temporal model as a special case.
+
+The median oracle errors were:
+
+| SNR (dB) | Non\-temporal oracle | Temporal oracle |
+| --- | --- | --- |
+| 20 | 0.01261 | **0.00982** |
+| 17 | 0.01915 | **0.01396** |
+| 14 | 0.03263 | **0.02526** |
+| 11 | 0.49351 | **0.49326** |
+| 8 | 0.55932 | **0.49942** |
+
+Paired one\-sided Wilcoxon tests comparing coefficient error favored the temporal family with development\-scale (p)\-values of approximately 0.002, 0.016, 0.031, 0.063, and 0.031 at 20, 17, 14, 11, and 8 dB, respectively.
+
+The exact trajectory\-recovery probabilities of the two oracle families were identical at each tested SNR:
+
+[1.0,\\;0.9,\\;0.7,\\;0.2,\\;0.2].Thus the principal oracle\-level benefit of temporal regularization is not an increase in the number of trials crossing the exact\-trajectory threshold. Rather, temporal regularization frequently produces a more accurate coefficient representation within the same trajectory\-recovery class.
+
+At 20, 17, and 14 dB, the reduction in median coefficient error is substantial. At lower SNR, neighboring scale states become difficult to distinguish from the data and the improvement becomes more realization dependent.
+
+In several realizations, the temporal oracle selects $\\lambda\_T=0$, reverting naturally to the non\-temporal solution. This behavior is desirable: the extended model family can exploit temporal information when beneficial without requiring a nonzero temporal penalty for every dataset.
+
+Taken together with the automatic paired comparison, these results indicate two distinct advantages of the temporal model:
+
+1. **Model\-level benefit:** the enlarged temporal candidate family frequently provides lower coefficient error than the best non\-temporal candidate.
+2. **Structural benefit under automatic selection:** temporal regularization substantially improves recovery of the intended compact one\-coefficient\-per\-active\-frame support.
+
+The evidence therefore supports interpreting the temporal prior as a geometric structural constraint rather than merely as an additional denoising term.
+
+
+
+# Dictionary-learning extension
+
+## Dictionary ADMM update
+
+Introduce unconstrained dictionary $D$, constrained dictionary $G$, and scaled dual $H$. The dictionary update is
+
+$$
+D^{(\ell+1)}
+=
+\arg\min_D
+\left\{
+\frac12\|\mathcal B_{X,\alpha}D-S\|_F^2
++
+\frac{\rho_D}{2}\|D-G^{(\ell)}+H^{(\ell)}\|_F^2
+\right\}.
+$$ {#eq-d-update}
+
+Its gradient is
+
+$$
+\nabla_DF
+=
+\mathcal B_{X,\alpha}^*(\mathcal B_{X,\alpha}D-S)
++
+\rho_D(D-G+H),
+$$ {#eq-d-gradient}
+
+and its normal equation is
+
+$$
+(\mathcal B_{X,\alpha}^*\mathcal B_{X,\alpha}+\rho_DI)D
+=
+\mathcal B_{X,\alpha}^*S+\rho_D(G-H).
+$$ {#eq-d-normal}
+
+The system can be solved by CG or CGLS without forming the normal matrix.
+
+## Dictionary feasible set
+
+Each base atom satisfies
+
+$$
+\mathcal C_D
+=
+\{g_k:g_k\ge0,\ \|g_k\|_2=1,\ (I-Z_M)g_k=0\},
+$$ {#eq-d-feasible}
+
+where $Z_M$ enforces the allowed support. Projection consists of support restriction, nonnegative clipping, and normalization.
+
+The constrained update is
+
+$$
+G^{(\ell+1)}=P_{\mathcal C_D}(D^{(\ell+1)}+H^{(\ell)}).
+$$ {#eq-g-update}
+
+## Scale-normalization update
+
+After projection,
+
+$$
+\alpha_{k,j}^{(\ell+1)}
+=
+\frac1{\|M_jg_k^{(\ell+1)}\|_2},
+$$ {#eq-alpha-update}
+
+followed by
+
+$$
+H^{(\ell+1)}
+=
+H^{(\ell)}+D^{(\ell+1)}-G^{(\ell+1)}.
+$$ {#eq-h-update}
+
+The update order is
+
+$$
+D\longrightarrow G\longrightarrow\alpha\longrightarrow H.
+$$ {#eq-dictionary-update-order}
+
+## Planned dictionary validation
+
+1. Implement $\mathcal B_{X,\alpha}$ for fixed $X$ and $\alpha$.
+2. Verify $\langle\mathcal B D,R\rangle=\langle D,\mathcal B^*R\rangle$.
+3. Verify @eq-d-gradient by centered finite differences.
+4. Implement CG/CGLS for @eq-d-normal.
+5. Validate dictionary projection and the $\alpha$ update.
+6. Recover a perturbed atom with known coefficients.
+7. Alternate coefficient and dictionary updates.
+8. Reproduce the original MATLAB single-Gaussian experiments.
+
+No modification to the currently validated coefficient operator is planned until the dictionary-side linearization and adjoint have been verified independently.
+
+# Discussion
+
+The successful temporal model is geometric rather than pointwise. Barycentric motion supplies an efficient centerline prior; the spread term removes the first-moment degeneracy; the squared gate permits finite-duration support; and full-state continuation addresses branch selection in the nonconvex solver.
+
+Parameter selection is treated as part of the estimator. Fixed parameters are insufficient for assessing performance across datasets with different noise realizations. The Monte Carlo study therefore repeats automatic selection independently for each realization and compares observable selectors with a post-hoc oracle.
+
+The dictionary-learning extension retains the same design philosophy: identify a linear operator and its adjoint, validate them numerically, then introduce CG and alternating optimization only after those foundations are sound.
+
+# Conclusions
+
+The proposed model combines logarithmic sparsity, barycentric trajectory motion, within-frame compactness, and smooth finite-duration gating. The formulation has explicit analytical gradients, avoids iterative transport subproblems, and supports reproducible automatic parameter selection.
+
+The coefficient-recovery phase is approaching completion; its remaining major validation is the multi-SNR Monte Carlo characterization. If those results are satisfactory, the next phase will implement the linear fixed-coefficient dictionary operator, its adjoint, the quadratic dictionary ADMM/CGLS update, explicit scale normalization, and finally alternating coefficient and dictionary learning.

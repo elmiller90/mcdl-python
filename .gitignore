@@ -10,6 +10,11 @@ venv/
 # VS Code local settings
 .vscode/
 
+# Quarto generated output
+docs/*_files/
+docs/*.html
+/.quarto/
+
 # Test/cache files
 .pytest_cache/
 .coverage
