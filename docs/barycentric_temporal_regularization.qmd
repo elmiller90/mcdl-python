@@ -877,18 +877,295 @@ $$
 D\longrightarrow G\longrightarrow\alpha\longrightarrow H.
 $$ {#eq-dictionary-update-order}
 
-## Planned dictionary validation
+## Dictionary validation results
 
-1. Implement $\mathcal B_{X,\alpha}$ for fixed $X$ and $\alpha$.
-2. Verify $\langle\mathcal B D,R\rangle=\langle D,\mathcal B^*R\rangle$.
-3. Verify @eq-d-gradient by centered finite differences.
-4. Implement CG/CGLS for @eq-d-normal.
-5. Validate dictionary projection and the $\alpha$ update.
-6. Recover a perturbed atom with known coefficients.
-7. Alternate coefficient and dictionary updates.
-8. Reproduce the original MATLAB single-Gaussian experiments.
+The dictionary-update implementation was validated incrementally before coupling it to coefficient estimation. Throughout these tests, the coefficient array \(X\) and scale-normalization factors \(\alpha\) were held fixed during each \(D\)-subproblem. Under these conditions, the dictionary forward map is linear in the base dictionary.
 
-No modification to the currently validated coefficient operator is planned until the dictionary-side linearization and adjoint have been verified independently.
+For base atom \(d_k\) and scale \(j\),
+
+$$
+d_{k,j}
+=
+\alpha_{k,j}M_jd_k,
+$$
+
+with
+
+$$
+\alpha_{k,j}
+=
+\frac{1}{\|M_jg_k\|_2}.
+$$
+
+The corresponding fixed-\(X\), fixed-\(\alpha\) dictionary operator is denoted by \(\mathcal B_{X,\alpha}\).
+
+### Forward linearity and adjoint
+
+The first validation confirmed
+
+$$
+\mathcal B_{X,\alpha}(aD_1+bD_2)
+=
+a\mathcal B_{X,\alpha}(D_1)
++
+b\mathcal B_{X,\alpha}(D_2).
+$$
+
+The measured relative linearity error was
+
+$$
+2.81\times10^{-16}.
+$$
+
+The dictionary adjoint was then tested using
+
+$$
+\left\langle
+\mathcal B_{X,\alpha}D,R
+\right\rangle
+=
+\left\langle
+D,\mathcal B_{X,\alpha}^{*}R
+\right\rangle.
+$$
+
+The relative adjoint error was
+
+$$
+1.57\times10^{-14}.
+$$
+
+These tests jointly validate the multiscale resampling, scale normalization, zero padding, convolution, physical-domain cropping, channel ordering, and corresponding transpose operations used by the dictionary update.
+
+### Dictionary objective gradient
+
+For
+
+$$
+f(D)
+=
+\frac{1}{2}
+\left\|
+\mathcal B_{X,\alpha}D-S
+\right\|_F^2,
+$$
+
+the gradient is
+
+$$
+\nabla_D f(D)
+=
+\mathcal B_{X,\alpha}^{*}
+\left(
+\mathcal B_{X,\alpha}D-S
+\right).
+$$
+
+A centered finite-difference directional-derivative test was performed for perturbation sizes from \(10^{-2}\) through \(10^{-7}\). The best relative error was
+
+$$
+1.08\times10^{-13}.
+$$
+
+The increase in error at the smallest perturbations was consistent with floating-point cancellation. The test therefore independently confirms the dictionary objective gradient.
+
+### Normal operator and conjugate-gradient solve
+
+The ADMM \(D\)-subproblem requires solution of
+
+$$
+\left(
+\mathcal B_{X,\alpha}^{*}\mathcal B_{X,\alpha}
++
+\sigma I
+\right)D
+=
+\mathcal B_{X,\alpha}^{*}S
++
+\sigma(G-H).
+$$
+
+The matrix-free normal operator
+
+$$
+\mathcal N(D)
+=
+\mathcal B_{X,\alpha}^{*}\mathcal B_{X,\alpha}D
++
+\sigma D
+$$
+
+was tested for symmetry and positive definiteness. The measured symmetry error was numerically zero.
+
+For a representative test with \(\sigma=0.7\),
+
+$$
+\langle D,\mathcal N(D)\rangle
+=
+5.9967\times10^3,
+$$
+
+while the theoretical lower bound
+
+$$
+\sigma\|D\|_F^2
+$$
+
+was \(1.0271\times10^1\).
+
+The resulting system was solved using matrix-free conjugate gradients. For a small problem in which the normal matrix could also be constructed explicitly, the CG solution agreed with a direct dense solve to relative error
+
+$$
+5.87\times10^{-13},
+$$
+
+with relative normal-equation residual
+
+$$
+1.86\times10^{-12}.
+$$
+
+This validates the Python equivalent of the MATLAB PCG dictionary solve while avoiding explicit construction of the normal matrix in the production algorithm.
+
+### Dictionary projection
+
+For the nonnegative-dictionary case, inspection of the MATLAB implementation showed that the \(G\)-subproblem applies nonnegativity, finite-support restriction, and per-atom unit-\(\ell_2\)-norm normalization.
+
+Since the Python base dictionary is represented directly on its finite \(M\)-sample support, the corresponding projection reduces to
+
+$$
+G_k
+=
+\frac{[D_{r,k}+H_k]_+}
+{\|[D_{r,k}+H_k]_+\|_2}
+$$
+
+for every nonzero projected atom.
+
+Tests confirmed nonnegativity and unit atom norms. An input whose nonnegative projection is identically zero is handled explicitly as a zero atom rather than allowing a division by zero to generate NaN values.
+
+### Scale-normalization update
+
+The MATLAB implementation recomputes scale normalization after the \(G\)-projection and before the dual update. For each atom and scale,
+
+$$
+n_{k,j}
+=
+\|M_jg_k\|_2,
+$$
+
+and
+
+$$
+\alpha_{k,j}
+=
+\frac{1}{n_{k,j}}.
+$$
+
+Consequently,
+
+$$
+\left\|
+\alpha_{k,j}M_jg_k
+\right\|_2
+=
+1.
+$$
+
+The Python implementation verified this identity numerically to better than \(10^{-12}\).
+
+Thus two distinct normalizations are present in the dictionary update: the base atom \(g_k\) is constrained to unit norm by the \(G\)-projection, while every resampled atom \(M_jg_k\) is separately normalized through \(\alpha_{k,j}\).
+
+### Known-\(X\) one-atom recovery
+
+The validated components were next combined in a noiseless synthetic experiment with exact known coefficients. This isolates dictionary estimation from coefficient-estimation error.
+
+The first experiment used one nonnegative base atom, three scales, and independently located sparse coefficient events. Recovery began from an unrelated feasible atom.
+
+After the first dictionary iteration, the recovered atom already had cosine similarity
+
+$$
+0.999876
+$$
+
+with the true atom. By iteration 10, the similarity was effectively
+
+$$
+1.00000000.
+$$
+
+After 100 iterations, the relative reconstruction residual was
+
+$$
+5.78\times10^{-7},
+$$
+
+and the final atom similarity was
+
+$$
+1.0000000000.
+$$
+
+The dictionary shape therefore converged substantially faster than the strict ADMM feasibility residual.
+
+### Known-\(X\) two-atom recovery
+
+A second experiment tested simultaneous recovery of two distinct nonnegative atoms. Exact known coefficients independently excited each atom across three scales and 12 observations.
+
+The true atoms had mutual cosine similarity of approximately
+
+$$
+0.607,
+$$
+
+so successful recovery required separation of substantially different dictionary shapes.
+
+After the first iteration, the minimum correct-channel cosine similarity was
+
+$$
+0.999425.
+$$
+
+By iteration 10 it had increased to approximately
+
+$$
+0.99999997.
+$$
+
+After 150 iterations, the relative reconstruction residual was
+
+$$
+5.83\times10^{-6},
+$$
+
+and the recovered-versus-true cosine-similarity matrix was approximately
+
+$$
+\begin{bmatrix}
+1.000000 & 0.606691 \\
+0.606690 & 1.000000
+\end{bmatrix}.
+$$
+
+Both dictionary atoms were therefore recovered essentially exactly in their coefficient-labelled channels.
+
+### Current validation boundary
+
+The following dictionary-learning components are now validated:
+
+1. fixed-\(X\), fixed-\(\alpha\) dictionary forward operator;
+2. dictionary adjoint;
+3. dictionary objective gradient;
+4. symmetric positive-definite normal operator;
+5. matrix-free conjugate-gradient solution of the \(D\)-subproblem;
+6. nonnegative finite-support unit-norm dictionary projection;
+7. post-projection recomputation of the multiscale normalization factors;
+8. noiseless known-\(X\) recovery of a single atom;
+9. noiseless known-\(X\) simultaneous recovery of two distinct atoms.
+
+These results validate the dictionary-update side of the multiscale model when coefficient information is known exactly. They do not yet establish joint dictionary and coefficient recovery.
+
+The next validation stage is therefore noiseless alternating \(X/D\) recovery, beginning with a single atom before extending to multiple atoms, noisy observations, and eventual reproduction of the original MATLAB single-Gaussian experiments.
 
 # Discussion
 
@@ -902,4 +1179,4 @@ The dictionary-learning extension retains the same design philosophy: identify a
 
 The proposed model combines logarithmic sparsity, barycentric trajectory motion, within-frame compactness, and smooth finite-duration gating. The formulation has explicit analytical gradients, avoids iterative transport subproblems, and supports reproducible automatic parameter selection.
 
-The coefficient-recovery phase is approaching completion; its remaining major validation is the multi-SNR Monte Carlo characterization. If those results are satisfactory, the next phase will implement the linear fixed-coefficient dictionary operator, its adjoint, the quadratic dictionary ADMM/CGLS update, explicit scale normalization, and finally alternating coefficient and dictionary learning.
+The fixed-coefficient dictionary-update phase is now validated, including the dictionary forward and adjoint operators, objective gradient, matrix-free CG solve, constrained dictionary projection, scale-normalization update, and noiseless one- and two-atom recovery with known coefficients. The next phase will couple these validated dictionary updates to the previously validated coefficient solver and study alternating \(X/D\) recovery, first under noiseless controlled conditions and subsequently with multiple atoms and noise.

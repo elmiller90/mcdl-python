@@ -1,207 +1,613 @@
-# MCDL\-Python
+# MCDL-Python
 
-A Python research implementation of nonnegative multiscale convolutional dictionary learning for recovering sparse, finite\-duration trajectories in position\-scale\-time coefficient fields.
+A Python research implementation of nonnegative multiscale convolutional dictionary learning (MCDL) for recovering sparse, finite-duration trajectories in position-scale-time coefficient fields.
 
-The project is based on the MATLAB implementation accompanying the space\-time multiscale convolutional dictionary\-learning work of Banco, Miller, and collaborators. The Python implementation is independently testable and is not intended as a literal line\-by\-line translation.
+The project is based on the MATLAB implementation accompanying the space-time multiscale convolutional dictionary-learning work of Banco, Miller, and collaborators. The Python implementation emphasizes explicit mathematical structure, independent numerical validation, reproducibility, and controlled experimental development rather than literal line-by-line translation.
 
 ## Current research objective
 
-The current coefficient\-recovery model solves
+The full problem consists of jointly estimating a multiscale base dictionary \(D\) and a structured coefficient tensor \(X\).
 
-\\widehat X
+For fixed dictionary \(D\), coefficient recovery solves
 
+\[
+\widehat X
 =
+\arg\min_{X\ge0}
+\left\{
+\frac12\|\mathcal A_DX-S\|_F^2
++
+\lambda_S R_{\log}(X)
++
+\lambda_T R_T(X)
+\right\},
+\]
 
-\\arg\\min\_\{X\\ge0\}
+where:
 
-\\left\\\{
-
-\\frac12\\\|\\mathcal A\_DX\-S\\\|\_F^2
-
-\+
-
-\\lambda\_S R\_\{\\log\}(X)
-
-\+
-
-\\lambda\_T R\_T(X)
-
-\\right\\\},where:
-
-- (\\mathcal A\_D) is the multiscale convolution operator for a fixed base dictionary (D);
-- (R\_\{\\log\}) is a nonconvex logarithmic sparsity penalty;
-- (R\_T) is a temporal regularizer for sparse trajectories in position\-scale\-time.
+- \(\mathcal A_D\) is the multiscale convolution operator for the current base dictionary;
+- \(R_{\log}\) is a nonconvex logarithmic sparsity penalty;
+- \(R_T\) is a temporal regularizer for sparse trajectories in position-scale-time.
 
 The active temporal model is
 
-R\_T(X)
-
+\[
+R_T(X)
 =
+R_{\mathrm{motion}}(X)
++
+\beta_V R_{\mathrm{spread}}(X).
+\]
 
-R\_\{\\mathrm\{motion\}\}(X)
+The motion term regularizes each frame's position and log-scale barycenter. The spread term suppresses diffuse or mixed representations that nevertheless have a favorable barycenter. A smooth squared activity gate permits finite-duration trajectories to appear and disappear without a first-order birth or death penalty.
 
-\+
+Dictionary learning uses the multiscale atom model
 
-\\beta\_VR\_\{\\mathrm\{spread\}\}(X).The motion term regularizes the trajectory of each frame’s position and log\-scale barycenter. The spread term suppresses diffuse or mixed representations having a favorable barycenter. A smooth squared activity gate permits trajectories to appear and disappear without a first\-order birth or death penalty.
+\[
+d_{k,j}
+=
+\alpha_{k,j}M_jd_k,
+\]
 
-## Validated components
+with
+
+\[
+\alpha_{k,j}
+=
+\frac{1}{\|M_jg_k\|_2}.
+\]
+
+During each dictionary \(D\)-update, \(X\) and \(\alpha\) are held fixed. The resulting dictionary forward operator is therefore linear in the base dictionary.
+
+## Current validation status
+
+Two major parts of the algorithm have now been independently validated:
+
+1. fixed-dictionary coefficient recovery;
+2. fixed-coefficient dictionary recovery.
+
+The next development phase is their integration through alternating \(X/D\) optimization.
+
+## Validated coefficient-recovery components
 
 ### Multiscale convolution
 
-- Multiscale resampling and convolution operators
-- Structured coefficient convention (X\\in\\mathbb R^\{L\\times K\\times J\\times T\})
-- Forward and adjoint implementations
-- Zero\-padded convolution convention matching the MATLAB experiments
-- Composite operator adjoint tests
+Validated functionality includes:
+
+- multiscale resampling and convolution;
+- structured coefficient convention
+  \[
+  X\in\mathbb R^{L\times K\times J\times T};
+  \]
+- forward and adjoint operators;
+- zero-padded convolution consistent with the MATLAB formulation;
+- numerical composite-operator adjoint tests.
 
 ### Sparse coefficient recovery
 
-- Nonnegative coefficient constraints
-- Logarithmic sparsity penalty
-- Continuation from an approximately (\\ell\_1) penalty to the nonconvex log penalty
-- ADMM splitting
-- Nonnegative L\-BFGS\-B coefficient update
-- Adaptive ADMM penalty parameter
+The coefficient solver includes:
+
+- nonnegative coefficient constraints;
+- logarithmic sparsity penalty;
+- continuation from an approximately \(\ell_1\) penalty to the nonconvex log penalty;
+- ADMM splitting;
+- nonnegative L-BFGS-B coefficient updates;
+- adaptive ADMM penalty control.
 
 ### Temporal regularization
 
-- Position and log\-scale barycentric motion
-- Smooth squared activity gate satisfying g(0)=g'(0)=0
-- Gated within\-frame variance penalty
-- Explicit analytical gradients
-- Directional finite\-difference validation near machine precision
-- Exact stationary, moving, birth, and death geometry tests
+The validated temporal model includes:
+
+- position barycentric motion;
+- log-scale barycentric motion;
+- smooth squared activity gating satisfying
+  \[
+  g(0)=g'(0)=0;
+  \]
+- gated within-frame variance regularization;
+- explicit analytical gradients;
+- directional finite-difference gradient validation near machine precision;
+- stationary, moving, birth, and death geometry tests.
 
 ### Nonconvex continuation
 
-The solver supports full\-state continuation of
+The solver supports full-state continuation of
 
-(X,Y,U,\\rho,a)between nearby parameter values.
+\[
+(X,Y,U,\rho,a)
+\]
 
-A compatibility test verifies that the stateful solver reproduces the original cold\-start ADMM solution exactly when no warm start is supplied.
+between nearby parameter values.
+
+A compatibility test verifies that the stateful solver reproduces the original cold-start ADMM solution when no warm start is supplied.
 
 ### Automatic parameter selection
 
 The project includes a hierarchical adaptive selector for
 
-(\\lambda\_S,\\lambda\_T,\\beta\_V).Selection uses observable quantities only:
+\[
+(\lambda_S,\lambda_T,\beta_V).
+\]
 
-1. expected\-noise discrepancy;
-2. residual\-regularizer tradeoff geometry;
+Selection uses observable quantities only:
+
+1. expected-noise discrepancy;
+2. residual-regularizer tradeoff geometry;
 3. solution stability over neighboring parameter values;
 4. connected stable parameter regions.
 
-Two unsupervised rules are currently compared:
+Two unsupervised strategies have been investigated:
 
-- discrepancy and stability\-region selection;
-- nested L\-curve selection.
+- discrepancy plus stability-region selection;
+- nested L-curve selection.
 
-Synthetic truth is revealed only after selection. A searched synthetic oracle is retained as a post\-hoc benchmark for separating selector failure from candidate\-family or identifiability failure.
+Synthetic truth is revealed only after parameter selection. A searched synthetic oracle is retained as a post-hoc benchmark for separating selector failure from candidate-family or identifiability failure.
 
 ## Noise convention
 
 Monte Carlo noise is generated as
 
-N\_i\\overset\{\\mathrm\{iid\}\}\{\\sim\}\\mathcal N(0,\\sigma^2).The prescribed variance is chosen from the requested SNR using expected noise energy. Individual realizations are not rescaled to have exactly the requested SNR.
+\[
+N_i\overset{\mathrm{iid}}{\sim}\mathcal N(0,\sigma^2).
+\]
+
+The prescribed variance is chosen from the requested SNR using expected noise energy. Individual realizations are not rescaled to have exactly the requested SNR.
 
 Parameter selection uses
 
-D\_\{\\mathrm\{exp\}\}
-
+\[
+D_{\mathrm{exp}}
 =
+\frac12N_{\mathrm{obs}}\sigma^2
+\]
 
-\\frac12N\_\{\\mathrm\{obs\}\}\\sigma^2and the discrepancy ratio
+and discrepancy ratio
 
-r\_D
-
+\[
+r_D
 =
+\frac{
+\frac12\|\mathcal A_DX-S\|_F^2
+}{
+D_{\mathrm{exp}}
+}.
+\]
 
-\\frac\{
+Realized noise energy is retained only for post-hoc diagnostics and is not available to the selector.
 
-\\frac12\\\|\\mathcal A\_DX\-S\\\|\_F^2
+## Development-scale Monte Carlo study
 
-\}\{
+The adaptive coefficient-recovery selector was evaluated on
 
-D\_\{\\mathrm\{exp\}\}
-
-\}.The realized noise energy is recorded only for post\-hoc diagnostics and is not available to the selector.
-
-
-Current numerical status
-The fixed-dictionary coefficient-recovery phase has reached a validated development milestone.
-The validation now includes:
-
-- multiscale forward and adjoint operators;
-- nonnegative log-sparse coefficient recovery;
-- barycentric motion regularization;
-- smooth finite-duration activity gating;
-- gated within-frame spread regularization;
-- analytical temporal gradients validated by directional finite differences;
-- full-state ADMM continuation;
-- expected-noise discrepancy selection;
-- hierarchical stability and L-curve parameter selectors;
-- paired temporal-versus-nontemporal ablation;
-- multi-SNR Monte Carlo characterization.
-Development-scale Monte Carlo study
-The adaptive selector was evaluated on
-5\ \text{SNR levels}\times10\ \text{independent realizations}
+\[
+5\text{ SNR levels}\times10\text{ independent realizations}
 =
-50\ \text{datasets},using
-\mathrm{SNR}\in\{20,17,14,11,8\}\ {\rm dB}.Regularization parameters were selected independently for every realization. Synthetic truth was used only after parameter selection.
+50\text{ datasets},
+\]
+
+using
+
+\[
+\mathrm{SNR}\in\{20,17,14,11,8\}\ {\rm dB}.
+\]
+
+Regularization parameters were selected independently for every realization. Synthetic truth was used only after parameter selection.
+
 Under nested L-curve selection, exact position-scale trajectory recovery was:
-SNR (dB)	Exact trajectory rate
-20	100%
-17	90%
-14	70%
-11	20%
-8	10%
+
+| SNR (dB) | Exact trajectory rate |
+|---:|---:|
+| 20 | 100% |
+| 17 | 90% |
+| 14 | 70% |
+| 11 | 20% |
+| 8 | 10% |
 
 The same selector recovered exactly eight significant coefficients in all 50 trials.
-Position recovery was substantially more robust than scale recovery. Performance degradation below approximately 14 dB is dominated by ambiguity among neighboring scale atoms rather than loss of the sparse temporal support.
-The searched synthetic oracle achieved exact trajectory rates of
-[100,\;90,\;70,\;20,\;20]\%.Thus, through 11 dB, the adaptive L-curve selector achieved the same exact-trajectory success probability as the searched oracle candidate family in this development study.
-Temporal-versus-nontemporal ablation
-A paired comparison was performed using exactly the same 50 noise realizations.
+
+Position recovery was substantially more robust than scale recovery. Performance degradation below approximately 14 dB was dominated by ambiguity among neighboring scale atoms rather than loss of sparse temporal support.
+
+The searched synthetic oracle achieved exact trajectory rates
+
+\[
+[100,\;90,\;70,\;20,\;20]\%.
+\]
+
+Thus, through 11 dB, the adaptive L-curve selector achieved the same exact-trajectory success rate as the searched oracle candidate family in this development study.
+
+### Temporal-versus-nontemporal ablation
+
+A paired comparison used exactly the same 50 noise realizations.
+
 The non-temporal baseline solved
+
+\[
 \min_{X\ge0}
 \frac12\|\mathcal A_DX-S\|_F^2
 +
-\lambda_SR_{\log}(X)with (\lambda_S) selected independently for each dataset.
+\lambda_SR_{\log}(X),
+\]
+
+with \(\lambda_S\) selected independently for every dataset.
+
 The temporal estimator additionally used
+
+\[
 \lambda_T
 \left[
 R_{\mathrm{motion}}(X)
 +
 \beta_VR_{\mathrm{spread}}(X)
-\right].The clearest adaptive benefit of temporal regularization was structural.
+\right].
+\]
+
 Under L-curve selection, the non-temporal exact-eight-support rates were
-[90,\;70,\;70,\;30,\;50]\%,whereas the temporal estimator achieved
-\boxed{100\%}exact-eight-support recovery at every tested SNR.
+
+\[
+[90,\;70,\;70,\;30,\;50]\%,
+\]
+
+whereas the temporal estimator achieved
+
+\[
+100\%
+\]
+
+exact-eight-support recovery at every tested SNR.
+
 Exact trajectory rates changed from
-[90,\;80,\;60,\;10,\;10]\%without temporal regularization to
-[100,\;90,\;70,\;20,\;10]\%with temporal regularization.
-Median coefficient errors under L-curve selection changed from
-[0.0272,\;0.0317,\;0.1612,\;0.5445,\;0.7080]to
-[0.0163,\;0.0221,\;0.0338,\;0.5049,\;0.7081].The temporal model therefore shows its most consistent benefit in suppressing extraneous coefficients and preserving the intended one-coefficient-per-active-frame geometry. At moderate SNR, this structural benefit is accompanied by improved trajectory recovery and substantially lower median coefficient error.
-Oracle model comparison
+
+\[
+[90,\;80,\;60,\;10,\;10]\%
+\]
+
+without temporal regularization to
+
+\[
+[100,\;90,\;70,\;20,\;10]\%
+\]
+
+with temporal regularization.
+
+Median coefficient errors changed from
+
+\[
+[0.0272,\;0.0317,\;0.1612,\;0.5445,\;0.7080]
+\]
+
+to
+
+\[
+[0.0163,\;0.0221,\;0.0338,\;0.5049,\;0.7081].
+\]
+
+The most consistent benefit of temporal regularization is therefore structural: suppression of extraneous coefficients and stabilization of the intended one-coefficient-per-active-frame representation. At moderate SNR this is accompanied by improved trajectory recovery and substantially lower coefficient error.
+
+### Oracle model comparison
+
 The best searched non-temporal and temporal candidates were also compared post hoc.
+
 Median non-temporal oracle coefficient errors were
-[0.01261,\;0.01915,\;0.03263,\;0.49351,\;0.55932],while median temporal-oracle errors were
-[0.00982,\;0.01396,\;0.02526,\;0.49326,\;0.49942].The corresponding exact trajectory rates were identical:
-[100,\;90,\;70,\;20,\;20]\%.The oracle comparison indicates that temporal regularization frequently improves coefficient accuracy even when both model families recover the same discrete trajectory.
-The temporal search includes (\lambda_T=0), so it can revert naturally to the non-temporal solution when temporal regularization is not beneficial.
-Interpretation of the coefficient-recovery milestone
-The current evidence supports three conclusions.
 
-1. Sparse temporal structure is robust.
-The barycentric motion, spread, and activity-gating model reliably produces compact finite-duration coefficient tracks.
+\[
+[0.01261,\;0.01915,\;0.03263,\;0.49351,\;0.55932],
+\]
 
-1. Temporal regularization adds measurable structural value.
-Its most consistent benefit is elimination of extraneous coefficients and stabilization of the intended one-coefficient-per-frame representation.
+while median temporal-oracle errors were
 
-1. Low-SNR failure is primarily a scale-identification problem.
-Position and activity remain substantially more robust than discrete scale recovery as SNR decreases.
-The current 10-trial-per-SNR experiment is a development study. The original MATLAB study used 100 noise realizations per SNR, so publication-scale experiments may eventually increase the number of Monte Carlo realizations after the complete dictionary-learning pipeline is available.
+\[
+[0.00982,\;0.01396,\;0.02526,\;0.49326,\;0.49942].
+\]
+
+The corresponding exact trajectory rates were identical:
+
+\[
+[100,\;90,\;70,\;20,\;20]\%.
+\]
+
+The oracle comparison indicates that temporal regularization can improve coefficient accuracy even when both model families recover the same discrete trajectory.
+
+The temporal search includes \(\lambda_T=0\), allowing it to revert naturally to the non-temporal solution when temporal regularization provides no benefit.
+
+### Interpretation of the coefficient-recovery milestone
+
+The development-scale evidence supports three conclusions:
+
+1. **Sparse temporal structure is robust.**  
+   The barycentric motion, spread, and activity-gating model reliably produces compact finite-duration coefficient tracks.
+
+2. **Temporal regularization adds measurable structural value.**  
+   Its most consistent benefit is elimination of extraneous coefficients and stabilization of the intended one-coefficient-per-frame representation.
+
+3. **Low-SNR failure is primarily a scale-identification problem.**  
+   Position and activity remain substantially more robust than discrete scale recovery as SNR decreases.
+
+The current 10-trial-per-SNR experiment remains a development study. The original MATLAB study used 100 noise realizations per SNR, so publication-scale experiments may eventually increase the number of Monte Carlo realizations after the complete dictionary-learning pipeline is available.
+
+## Dictionary learning
+
+The dictionary update uses fixed coefficients \(X\) and fixed scale factors \(\alpha\) during each \(D\)-subproblem.
+
+Define
+
+\[
+(\mathcal B_{X,\alpha}D)_t
+=
+\sum_{k,j}
+(\alpha_{k,j}M_jd_k)*x_{k,j,t}.
+\]
+
+The ADMM \(D\)-subproblem is
+
+\[
+D^{(\ell+1)}
+=
+\arg\min_D
+\left\{
+\frac12
+\|\mathcal B_{X,\alpha}D-S\|_F^2
++
+\frac{\rho_D}{2}
+\|D-G^{(\ell)}+H^{(\ell)}\|_F^2
+\right\}.
+\]
+
+Its normal equation is
+
+\[
+\left(
+\mathcal B_{X,\alpha}^{*}\mathcal B_{X,\alpha}
++
+\rho_DI
+\right)D
+=
+\mathcal B_{X,\alpha}^{*}S
++
+\rho_D(G-H).
+\]
+
+The projected dictionary variable is updated according to the MATLAB nonnegative-dictionary constraint:
+
+\[
+G_k
+=
+\frac{[D_{r,k}+H_k]_+}
+{\|[D_{r,k}+H_k]_+\|_2}
+\]
+
+for each nonzero atom, followed by recomputation of the scale-normalization factors
+
+\[
+\alpha_{k,j}
+=
+\frac{1}{\|M_jg_k\|_2}.
+\]
+
+The dual variable then updates as
+
+\[
+H^{(\ell+1)}
+=
+H^{(\ell)}
++
+D_r^{(\ell+1)}
+-
+G^{(\ell+1)}.
+\]
+
+Thus the MATLAB-compatible update order is
+
+\[
+D
+\longrightarrow
+G
+\longrightarrow
+\alpha
+\longrightarrow
+H.
+\]
+
+## Validated dictionary-learning components
+
+The fixed-\(X\) dictionary-update path has now been validated incrementally.
+
+### Dictionary forward operator and adjoint
+
+The fixed-\(X\), fixed-\(\alpha\) forward operator satisfies linearity to relative error
+
+\[
+2.81\times10^{-16}.
+\]
+
+Its numerical adjoint test gives relative error
+
+\[
+1.57\times10^{-14}.
+\]
+
+No changes to the previously validated coefficient-side `MultiscaleConvolutionOperator` were required.
+
+### Dictionary objective gradient
+
+For
+
+\[
+f(D)
+=
+\frac12
+\|\mathcal B_{X,\alpha}D-S\|_F^2,
+\]
+
+the analytical gradient
+
+\[
+\nabla_Df
+=
+\mathcal B_{X,\alpha}^{*}
+(\mathcal B_{X,\alpha}D-S)
+\]
+
+was verified by centered finite differences. The best relative directional-derivative error was approximately
+
+\[
+1.08\times10^{-13}.
+\]
+
+### Normal operator and CG solve
+
+The normal operator
+
+\[
+\mathcal N(D)
+=
+\mathcal B_{X,\alpha}^{*}
+\mathcal B_{X,\alpha}D
++
+\rho_DD
+\]
+
+was verified to be symmetric and positive definite for \(\rho_D>0\).
+
+The matrix-free CG solution agreed with an explicitly assembled direct solve to relative error
+
+\[
+5.87\times10^{-13},
+\]
+
+with relative normal-equation residual
+
+\[
+1.86\times10^{-12}.
+\]
+
+### Dictionary projection
+
+The MATLAB-compatible nonnegative projection has been implemented and tested.
+
+For nonzero atoms it enforces:
+
+- prescribed finite base support;
+- nonnegativity;
+- unit \(\ell_2\) norm.
+
+Zero projected atoms are handled explicitly without generating NaNs.
+
+### Scale normalization
+
+After the \(G\)-projection,
+
+\[
+n_{k,j}
+=
+\|M_jg_k\|_2
+\]
+
+and
+
+\[
+\alpha_{k,j}
+=
+\frac1{n_{k,j}}
+\]
+
+are recomputed.
+
+Tests verify
+
+\[
+\|\alpha_{k,j}M_jg_k\|_2=1
+\]
+
+to better than \(10^{-12}\).
+
+Base-atom normalization and scale-dependent resampled-atom normalization are therefore explicitly treated as separate operations.
+
+## Known-\(X\) dictionary recovery
+
+### One-atom recovery
+
+A noiseless one-atom experiment was performed with exact known coefficients and three scales.
+
+Starting from an unrelated feasible dictionary atom:
+
+- cosine similarity after the first iteration was \(0.999876\);
+- cosine similarity was effectively \(1.00000000\) by iteration 10;
+- final cosine similarity was \(1.0000000000\);
+- final relative reconstruction residual was
+  \[
+  5.78\times10^{-7}.
+  \]
+
+### Two-atom recovery
+
+A second noiseless experiment used two distinct nonnegative atoms with exact known coefficients independently exciting both atoms across three scales and 12 observations.
+
+The true atoms had mutual cosine similarity approximately \(0.607\), providing a nontrivial atom-separation test.
+
+After 150 dictionary iterations:
+
+- final relative reconstruction residual was
+  \[
+  5.83\times10^{-6};
+  \]
+- both correct-channel cosine similarities were effectively 1;
+- the final similarity matrix was approximately
+
+\[
+\begin{bmatrix}
+1.000000 & 0.606691\\
+0.606690 & 1.000000
+\end{bmatrix}.
+\]
+
+These experiments establish accurate one- and two-atom dictionary recovery when coefficient information is exact.
+
+## Current validation boundary
+
+The following are now considered validated:
+
+### Coefficient side
+
+- multiscale convolution and adjoints;
+- nonnegative log-sparse recovery;
+- barycentric temporal motion;
+- finite-duration activity gating;
+- within-frame spread regularization;
+- analytical temporal gradients;
+- full-state nonconvex continuation;
+- expected-noise adaptive parameter selection;
+- multi-SNR Monte Carlo characterization;
+- temporal-versus-nontemporal paired ablation;
+- oracle model comparison.
+
+### Dictionary side
+
+- fixed-\(X\), fixed-\(\alpha\) dictionary forward operator;
+- dictionary adjoint;
+- dictionary objective gradient;
+- SPD normal operator;
+- matrix-free CG \(D\)-solve;
+- nonnegative finite-support unit-norm projection;
+- explicit scale-normalization update;
+- noiseless known-\(X\) one-atom recovery;
+- noiseless known-\(X\) two-atom recovery.
+
+Joint coefficient/dictionary recovery has **not yet been validated**.
+
+## Next development milestone
+
+The next phase is alternating coefficient and dictionary estimation.
+
+The planned progression is:
+
+1. noiseless alternating \(X/D\) recovery with one atom;
+2. noiseless alternating \(X/D\) recovery with multiple atoms;
+3. controlled noisy alternating recovery;
+4. temporal-versus-nontemporal comparison with learned dictionaries;
+5. reproduction of the original MATLAB single-Gaussian experiments;
+6. publication-scale Monte Carlo studies after the complete pipeline is stable.
+
+Previously validated coefficient and dictionary components should remain unchanged unless an integration test identifies a specific inconsistency.
 
 ## Project layout
 
@@ -209,170 +615,144 @@ The current 10-trial-per-SNR experiment is a development study. The original MAT
 
 The project root contains the active numerical implementation:
 
-- multiscale\_convolution.py: multiscale forward and adjoint operator
-- zero\_padded\_convolution.py: convolution engine
-- x\_update.py: smooth nonnegative coefficient update
-- log\_admm.py: original log\-penalty ADMM solver
-- log\_admm\_stateful\_compat.py: full\-state continuation\-compatible solver
-- barycentric\_transition.py: motion, activity\-gate, and spread regularization
-- local\_graph.py: shift\-scale geometry
-- local\_transition.py: archived transition geometry still used by validation code
-- gaussian\_experiment.py: synthetic problem and variance\-controlled noise utilities
+- `multiscale_convolution.py`: multiscale coefficient-side forward and adjoint operator
+- `zero_padded_convolution.py`: zero-padded convolution engine
+- `multiscale_operator.py`: multiscale resampling and its adjoint
+- `x_update.py`: smooth nonnegative coefficient update
+- `log_admm.py`: original log-penalty ADMM solver
+- `log_admm_stateful_compat.py`: full-state continuation-compatible solver
+- `barycentric_transition.py`: motion, activity-gate, and spread regularization
+- `local_graph.py`: shift-scale geometry
+- `local_transition.py`: historical transition geometry still used by validation code
+- `gaussian_experiment.py`: synthetic problem and variance-controlled noise utilities
+- `dictionary_forward_operator.py`: fixed-\(X\), fixed-\(\alpha\) dictionary forward, adjoint, and normal operators
+- `dictionary_cg.py`: matrix-free CG dictionary \(D\)-solve
+- `dictionary_projection.py`: nonnegative unit-norm base-dictionary projection
+- `dictionary_alpha.py`: scale-dependent normalization-factor update
 
 ### Tests
 
-tests/ contains numerical validation for:
+`tests/` contains numerical validation for:
 
-- operators and adjoints;
-- convolution conventions;
+- multiscale operators and adjoints;
+- zero-padded convolution conventions;
+- coefficient-recovery behavior;
 - temporal gradients;
 - ADMM compatibility;
-- end\-to\-end recovery;
+- dictionary forward linearity;
+- dictionary adjoint consistency;
+- dictionary objective gradients;
+- dictionary normal operator and CG solve;
+- dictionary projection;
+- scale-normalization updates;
 - historical softmin, Sinkhorn, and transition formulations.
 
-Tests should be run as Python modules from the project root.
+Some historical tests correspond to archived experimental implementations and are not part of the current core regression suite.
 
 ### Active experiments
 
-experiments/barycentric/ contains finite\-track and continuation experiments.
+`experiments/barycentric/` contains finite-track and continuation experiments.
 
-experiments/parameter\_selection/ contains:
+`experiments/parameter_selection/` contains:
 
 - regularization grids;
-- discrepancy and L\-curve analyses;
-- the adaptive hierarchical selector;
-- the Monte Carlo wrapper.
+- discrepancy and L-curve analyses;
+- adaptive hierarchical selection;
+- Monte Carlo wrappers;
+- paired temporal-versus-nontemporal comparisons.
 
-experiments/diagnostics/ contains scale\-confusion and comparative diagnostics.
+`experiments/diagnostics/` contains scale-confusion and comparative diagnostics.
+
+`experiments/dictionary_learning/` contains the controlled known-\(X\) dictionary-recovery experiments and will contain the alternating \(X/D\) experiments.
 
 ### Archived approaches
 
-archive/sinkhorn/ preserves the local optimal\-transport implementation and benchmarks.
+`archive/sinkhorn/` preserves the local optimal-transport implementation and benchmarks.
 
-archive/gated\_markov/ preserves the Markov/Hellinger transition experiments.
+`archive/gated_markov/` preserves the Markov/Hellinger transition experiments.
 
-These approaches are retained because their negative results motivate the final barycentric model.
+These approaches are retained because their negative or intermediate results motivate the final barycentric temporal model.
 
 ### Documentation
 
-docs/barycentric\_temporal\_regularization.qmd is the living mathematical and numerical specification.
+`docs/barycentric_temporal_regularization.qmd` is the living mathematical and numerical specification.
 
-The Quarto report contains:
+It contains:
 
 - model derivations;
-- gradient formulas;
+- analytical gradient formulas;
 - optimization details;
-- parameter\-selection methodology;
-- validated numerical results;
-- Monte Carlo analysis as it becomes available.
+- parameter-selection methodology;
+- Monte Carlo results;
+- temporal-versus-nontemporal comparisons;
+- dictionary ADMM formulation;
+- dictionary operator validation;
+- known-\(X\) dictionary-recovery results;
+- the current validation boundary and next planned experiments.
 
 ## Running the current workflow
 
-The principal workflow is:
+### Environment
 
-1. run the numerical validation tests;
-2. run the single\-realization adaptive selector;
-3. inspect its JSON summary;
-4. run the Monte Carlo wrapper;
-5. render the Quarto technical report.
+Create and activate a machine-specific Python virtual environment. Virtual environments should not be copied between Windows and Linux systems.
 
-The Monte Carlo wrapper saves one summary per trial and skips completed trials when restarted. This permits long studies to resume safely after interruption.
+Install the repository dependencies from:
 
+`requirements.txt`
 
-Current milestone
-The fixed-dictionary coefficient-recovery phase is now considered validated at development scale.
-Validated components are:
+Development testing additionally requires `pytest`.
 
-- multiscale convolution and adjoints;
-- log-sparse nonnegative recovery;
-- barycentric temporal motion;
-- finite-duration activity gating;
-- within-frame spread regularization;
-- analytical gradients;
-- full-state nonconvex continuation;
-- expected-noise adaptive parameter selection;
-- multi-SNR Monte Carlo characterization;
-- temporal-versus-nontemporal paired ablation;
-- oracle model comparison.
-The authoritative mathematical description is maintained in:
-docs/barycentric_temporal_regularization.qmd
-Experimental summaries are stored under:
-results/barycentric_monte_carlo/
-Next phase: dictionary learning
-The next major development phase is estimation of the base dictionary atoms rather than treating the dictionary as known.
-The original MCDL formulation represents each scaled atom as
-d_{k,j}
-=
-\alpha_{k,j}M_jd_k,
-\qquad
-\alpha_{k,j}
-=
-\frac1{\|M_jd_k\|_2}.During a dictionary update, the coefficient tensor (X) and normalization variables (\alpha) are held fixed. The resulting map from the base dictionary to the signal is linear:
-(\mathcal B_{X,\alpha}D)_t
-=
-\sum_{k,j}
-(\alpha_{k,j}M_jd_k)*x_{k,j,t}.The dictionary ADMM subproblem is therefore quadratic:
-D^{(\ell+1)}
-=
-\arg\min_D
-\left\{
-\frac12\|\mathcal B_{X,\alpha}D-S\|_F^2
-+
-\frac{\rho_D}{2}
-\|D-G^{(\ell)}+H^{(\ell)}\|_F^2
-\right\}.Its normal equation is
-\left(
-\mathcal B_{X,\alpha}^{*}
-\mathcal B_{X,\alpha}
-+
-\rho_DI
-\right)D
-=
-\mathcal B_{X,\alpha}^{*}S
-+
-\rho_D(G-H).The base atom is then projected onto the feasible set defined by:
+### Regression testing
 
-- prescribed finite support;
-- nonnegativity;
-- unit (\ell_2) norm.
-After projection,
-\alpha_{k,j}
-=
-\frac1{\|M_jg_k\|_2}is recomputed explicitly.
-Planned dictionary-learning milestones
+Tests should be run from the repository root using:
 
-1. Implement the fixed-(X,\alpha) dictionary forward operator.
-2. Implement and verify its adjoint.
-3. Validate the dictionary data-fidelity gradient.
-4. Implement the CG/CGLS quadratic dictionary update.
-5. Implement support, nonnegativity, and unit-norm projection.
-6. Validate the explicit scale-normalization update.
-7. Recover a perturbed base atom with (X=X_{\rm true}) fixed.
-8. Alternate coefficient and dictionary updates.
-9. Reproduce the original MATLAB single-Gaussian experiments.
-10. Repeat temporal-versus-nontemporal evaluation with learned rather than known dictionaries.
-No changes to the currently validated coefficient-side MultiscaleConvolutionOperator should be made until the dictionary-side operator and its adjoint have been validated independently.
-Next development branch
-The recommended next branch is:
-feature/dictionary-learning
-The dictionary-learning phase should begin from the validated state documented here and in the Quarto technical report.
+`python -m pytest`
 
+The current core validation can also be run selectively when working on a particular component.
+
+### Coefficient experiments
+
+The coefficient-recovery workflow consists of:
+
+1. numerical operator and gradient validation;
+2. single-realization adaptive parameter selection;
+3. inspection of selected-parameter summaries;
+4. Monte Carlo evaluation;
+5. temporal-versus-nontemporal comparison;
+6. Quarto report rendering.
+
+Long Monte Carlo studies save per-trial summaries and can skip completed trials when restarted.
+
+### Dictionary experiments
+
+Known-\(X\) dictionary experiments are run from the repository root as Python modules.
+
+The current validated experiments are:
+
+- `experiments.dictionary_learning.known_x_one_atom`
+- `experiments.dictionary_learning.known_x_two_atom`
+
+These experiments should remain unchanged as regression-quality development benchmarks while alternating \(X/D\) recovery is introduced separately.
 
 ## Development policy
 
-A component is considered validated only after its mathematical adjoint or gradient passes numerical testing and its behavior is confirmed in a controlled synthetic experiment.
+A numerical component is considered validated only after its relevant mathematical identity, adjoint, or gradient passes numerical testing and its behavior is confirmed in a controlled synthetic experiment.
+
+Validated components should not be casually refactored while introducing new functionality. New integration logic should be developed in parallel files or experiments whenever practical.
 
 Validated milestones should be preserved through:
 
-- a focused Git commit;
-- an update to this README;
-- an update to the Quarto report when the mathematical model or scientific conclusions change materially.
+- focused Git commits;
+- README updates when the validated repository state or workflow changes;
+- Quarto updates when mathematics, methodology, or validated scientific results change materially.
 
 Experimental code and negative results should be archived rather than silently deleted.
 
+Git remains the source of truth when moving development between the local Windows environment and the Tufts Linux cluster. Machine-specific virtual environments are not part of the repository.
+
 ## Reference implementation
 
-The original MATLAB implementation is available in the dbanco/CHESS\-Research repository under MATLAB/MultiscaleDL.
+The original MATLAB implementation is available in the `dbanco/CHESS-Research` repository under `MATLAB/MultiscaleDL`, with the current dictionary-learning reference code examined under `MCDL-OF`.
 
 The Python project is designed to provide:
 
@@ -380,5 +760,5 @@ The Python project is designed to provide:
 - independently validated operators and gradients;
 - reproducible parameter selection;
 - restartable Monte Carlo experiments;
-- a clear path from coefficient recovery to full dictionary learning.
-
+- controlled validation of dictionary learning;
+- a clear progression from fixed-dictionary coefficient recovery to full alternating multiscale dictionary learning.
