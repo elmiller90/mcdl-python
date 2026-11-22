@@ -40,3 +40,7 @@ Thumbs.db
 *.bak_expected_noise
 __pycache__/
 *.pyc
+
+# Slurm output
+cluster/*.out
+cluster/*.err
