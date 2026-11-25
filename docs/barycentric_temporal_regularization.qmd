@@ -27,9 +27,13 @@ execute:
 ---
 
 ::: {.callout-note title="Current project state"}
-The multiscale coefficient-recovery pipeline, logarithmic sparsity model, barycentric temporal regularizer, analytical gradients, full-state continuation, and automatic parameter-selection prototype have been numerically validated.
+The multiscale coefficient-recovery pipeline, logarithmic sparsity model, barycentric temporal regularizer, analytical gradients, full-state continuation, automatic parameter-selection prototype, fixed-$X$ dictionary update, and controlled alternating coefficient/dictionary recovery have now been numerically validated.
 
-A multi-SNR Monte Carlo study of adaptive parameter selection is currently running. Dictionary learning is the next planned phase. Its mathematical structure has been recovered from the original MCDL formulation, but its Python implementation has not yet begun.
+The current dictionary-learning benchmark reproduces the 20 dB `gaussian_ramp_overlap_sine2` problem from the reference MATLAB workflow. The Python implementation includes the MATLAB-compatible flat initialization, exact 10-scale rational grid, L1-to-log sparse schedule, coefficient and dictionary over-relaxation, adaptive ADMM penalties, and padded Fourier-domain coefficient update.
+
+A focused oracle-development sweep identifies $\lambda_S=0.24$ as a useful 20 dB reference. After a 100-iteration prefit and 200 additional non-temporal MCDL iterations, the learned Gaussian and ramp have cosine similarities $0.99243$ and $0.88441$, respectively, with 158 significant coefficients compared with 160 in truth.
+
+The next phase is temporally regularized joint dictionary learning initialized from this validated non-temporal prefit. The value $\lambda_S=0.24$ is an oracle-development reference, not yet an unsupervised parameter-selection result.
 :::
 
 # Abstract
@@ -38,1145 +42,430 @@ We develop a temporal regularization framework for nonnegative multiscale convol
 
 The model combines a nonconvex logarithmic sparsity penalty with a barycentric temporal regularizer consisting of a trajectory-motion term and a gated within-frame spread term. A smooth squared activity gate satisfies both $g(0)=0$ and $g'(0)=0$, permitting natural track birth and death. All temporal components possess explicit gradients and require no inner transport optimization.
 
-The optimization problem remains nonconvex. Numerical experiments show that full-state ADMM continuation is important for tracking favorable sparse branches. A hierarchical automatic parameter-selection procedure based on expected-noise discrepancy, stable parameter regions, and L-curve ideas is developed and evaluated against a post-hoc synthetic oracle. The next phase extends the validated fixed-dictionary coefficient estimator to joint dictionary learning with explicit scale-normalization variables.
+The optimization problem remains nonconvex. Numerical experiments show that full-state ADMM continuation is important for tracking favorable sparse branches. A hierarchical automatic parameter-selection procedure based on expected-noise discrepancy, stable parameter regions, and L-curve ideas is developed and evaluated against a post-hoc synthetic oracle.
+
+The fixed-dictionary coefficient model has now been extended to joint dictionary learning. The fixed-$X$ dictionary operator, adjoint, normal equation, projection, and scale-normalization update have been independently validated. In addition, the principal non-temporal initialization workflow of the reference MATLAB Gaussian/ramp example has been reproduced in Python. At 20 dB, the resulting alternating MCDL estimator recovers a near-exact Gaussian atom, a recognizable ramp atom, and essentially the correct sparse support size. This establishes a controlled non-temporal learned-dictionary baseline for the next temporally regularized stage.
 
 # Problem formulation
-
-## Multiscale coefficient model
 
 Let
 
 $$
-X(n,k,j,t)\ge 0
+X(n,k,j,t)\ge0
 $$
 
 denote the coefficient tensor, where $n$ is shift, $k$ is dictionary-atom index, $j$ is scale, and $t$ is time. The data model is
 
 $$
-S=\mathcal A_DX+N,
+S=\mathcal A_DX+N.
 $$ {#eq-forward}
 
-where $D$ denotes the base dictionary and $N$ is additive noise.
-
-For fixed $D$, coefficient recovery solves
+For fixed dictionary $D$,
 
 $$
-\widehat X
-=
-\arg\min_{X\ge0}
-\left\{
+\widehat X=\arg\min_{X\ge0}\left\{
 \frac12\|\mathcal A_DX-S\|_F^2
 +\lambda_SR_{\log}(X;a)
 +\lambda_TR_T(X)
 \right\}.
 $$ {#eq-main}
 
-The data-fidelity term is
+The active temporal model is
 
 $$
-D(X)=\frac12\|\mathcal A_DX-S\|_F^2.
-$$ {#eq-data}
-
-## Desired trajectory geometry
-
-The desired representation has four properties:
-
-1. **Sparse cross-section:** each active frame contains very few significant coefficients.
-2. **Smooth centerline:** the active location evolves smoothly through shift--scale space.
-3. **Compactness:** smoothness is not achieved by spreading mass over neighboring coefficients.
-4. **Finite duration:** a trajectory may exist only over a contiguous interval of frames.
-
-Thus the target representation is a small collection of finite curves embedded in $(n,\log s,t)$.
+R_T(X)=R_{\mathrm{motion}}(X)+\beta_VR_{\mathrm{spread}}(X).
+$$ {#eq-complete-temporal}
 
 # Logarithmic sparsity regularization
 
 The nonconvex logarithmic penalty is
 
 $$
-R_{\log}(X;a)
-=
-\frac1a\sum_i\log(1+aX_i),
-\qquad X_i\ge0.
+R_{\log}(X;a)=\frac1a\sum_i\log(1+aX_i),\qquad X_i\ge0.
 $$ {#eq-logpen}
 
-For small $a$,
+For the general coefficient-recovery solver, continuation evolves $a$ from $a_{\min}=10^{-4}$ toward $a_{\max}=0.95/\lambda_S$.
+
+## MATLAB-compatible sparse schedule for dictionary initialization
+
+The reference Gaussian/ramp MCDL initialization uses a related but distinct schedule. For iterations $r\le20$, it uses ordinary nonnegative $\ell_1$ shrinkage,
 
 $$
-\frac1a\log(1+ax)\to x,
+Y=\left[X_r+U-\frac{\lambda_S}{\rho_X}\right]_+.
 $$
 
-so the model approaches nonnegative $\ell_1$ regularization. Increasing $a$ produces a more strongly sparsity-promoting concave penalty with reduced bias on large coefficients.
-
-Continuation evolves $a$ according to
+Beginning with iteration 21, the update switches to logarithmic shrinkage with fixed
 
 $$
-a_r
-=
-a_{\min}
-\left(\frac{a_{\max}}{a_{\min}}\right)^{\min(r,R_c)/R_c},
-$$ {#eq-a-continuation}
-
-where
-
+a=\frac{0.95}{\lambda_S}.
 $$
-a_{\min}=10^{-4},
-\qquad
-a_{\max}=\frac{0.95}{\lambda_S}.
-$$
+
+This compatibility schedule is used only in the Banco-style dictionary-learning reproduction. The previously validated stateful continuation formulation remains the active coefficient-recovery implementation for the general temporal estimator.
 
 # Scaled dictionary atoms
 
-Let $d_k\in\mathbb R^M$ be base atom $k$ and let $M_j$ denote the linear resampling operator for physical scale $s_j$. The unnormalized scaled atom is
+Let $d_k\in\mathbb R^M$ be base atom $k$ and $M_j$ the rational resampling operator. Define
 
 $$
-\widetilde d_{k,j}=M_jd_k.
-$$ {#eq-resampled-atom}
+\widetilde d_{k,j}=M_jd_k,
+$$
 
-The original MCDL formulation introduces an explicit scale-normalization coefficient
+and
 
 $$
-\alpha_{k,j}=\frac1{\|M_jd_k\|_2},
+\alpha_{k,j}=\frac1{\|M_jd_k\|_2},\qquad
+d_{k,j}=\alpha_{k,j}M_jd_k.
 $$ {#eq-alpha}
 
-so that
-
-$$
-d_{k,j}=\alpha_{k,j}M_jd_k,
-\qquad
-\|d_{k,j}\|_2=1.
-$$ {#eq-scaled-atom}
-
-For fixed-dictionary coefficient recovery, computing normalized scaled atoms directly is equivalent to using fixed $\alpha_{k,j}$. During dictionary learning, however, $\alpha$ is held fixed while updating the base dictionary, preserving linearity in $D$.
-
-Scale is represented geometrically by
-
-$$
-\xi_j=\log s_j.
-$$ {#eq-log-scale}
-
-For the current five-scale model,
-
-$$
-s=\left[1,\frac45,\frac34,\frac23,\frac12\right].
-$$
-
-# Why direct frame smoothing is undesirable
-
-A conventional penalty such as
-
-$$
-\sum_t\|X_{t+1}-X_t\|_F^2
-$$
-
-encourages neighboring coefficient images to resemble one another pointwise. A translating one-sparse coefficient may have a large pointwise difference despite defining a perfectly smooth physical trajectory. Conversely, pointwise smoothing can favor diffuse clouds that overlap over time. Temporal regularization should therefore act on trajectory geometry rather than directly smoothing full coefficient frames.
-
-# Alternative temporal models considered
-
-## Soft-minimum local transitions
-
-An earlier model used a soft minimum over local shift--scale transitions. It demonstrated that local temporal coupling can resolve trajectory ambiguities while maintaining sparsity, but its parameter had an indirect geometric interpretation and stable solutions occupied broad nonunique plateaus.
-
-## Local optimal transport
-
-Optimal transport represents coefficient mass moving through shift--scale space. A local ground cost was defined by
-
-$$
-C((n,j),(n',j'))
-=
-\left(\frac{n'-n}{v_n}\right)^2
-+
-\left(\frac{\log s_{j'}-\log s_j}{v_s}\right)^2.
-$$ {#eq-ground-cost}
-
-Sparse and log-domain Sinkhorn implementations were validated. However, sharp transport geometry required thousands of inner iterations in smooth test cases. The nested computation
-
-$$
-\text{ADMM}\to\text{L-BFGS-B}\to\text{Sinkhorn}
-$$
-
-was therefore computationally unsuitable.
-
-## Markov/Hellinger transition model
-
-A local row-stochastic transition kernel replaced transport by comparing $p_{t+1}$ with $K^Tp_t$. Although computationally cheaper and gradient-valid, a one-sparse source generates a diffuse Markov prediction. Even very small temporal weights caused substantial support proliferation. The model was rejected because it conflicted directly with sparse-curve recovery.
+During a dictionary update, $X$ and $\alpha$ are held fixed so that the forward map remains linear in the base dictionary.
 
 # Barycentric temporal representation
 
-## Frame mass and normalized distribution
-
-For atom $k$ and frame $t$, define
+For atom $k$ and frame $t$, define mass
 
 $$
-m_{k,t}=\sum_{n,j}X(n,k,j,t).
-$$ {#eq-mass}
+m_{k,t}=\sum_{n,j}X(n,k,j,t),
+$$
 
-Introduce the uniform background $u_{n,j}=1/(LJ)$ and define
+and normalized frame distribution
 
 $$
-p_{n,j,k,t}
-=
-\frac{X(n,k,j,t)+\delta u_{n,j}}{m_{k,t}+\delta},
-$$ {#eq-normalized-frame}
-
-with $\delta=10^{-10}$. Then $\sum_{n,j}p_{n,j,k,t}=1$ even for an inactive frame.
-
-## Barycentric coordinates
+p_{n,j,k,t}=\frac{X(n,k,j,t)+\delta/(LJ)}{m_{k,t}+\delta},\qquad \delta=10^{-10}.
+$$
 
 The position and log-scale barycenters are
 
 $$
 \bar n_{k,t}=\sum_{n,j}p_{n,j,k,t}n,
-$$ {#eq-position-barycenter}
-
-and
-
-$$
+\qquad
 \bar\xi_{k,t}=\sum_{n,j}p_{n,j,k,t}\log s_j.
-$$ {#eq-scale-barycenter}
-
-The pair $z_{k,t}=(\bar n_{k,t},\bar\xi_{k,t})$ describes the trajectory centerline.
-
-# Smooth activity gating
-
-The final gate is
-
-$$
-g(m)=\frac{m^2}{m^2+\mu^2},
-$$ {#eq-gate}
-
-with derivative
-
-$$
-g'(m)=\frac{2m\mu^2}{(m^2+\mu^2)^2}.
-$$ {#eq-gate-derivative}
-
-Hence
-
-$$
-g(0)=0,
-\qquad
-g'(0)=0.
-$$ {#eq-gate-zero}
-
-With $\mu=0.05$, numerical background mass is effectively inactive while a unit-amplitude trajectory is almost fully regularized.
-
-# Barycentric motion regularization
-
-Let $v_n=1$ and let $v_s$ be a characteristic adjacent spacing in log scale. Define
-
-$$
-w_{k,t}=g(m_{k,t})g(m_{k,t+1}).
-$$ {#eq-pair-gate}
-
-The pairwise motion energy is
-
-$$
-E_{k,t}^{\mathrm{motion}}
-=
-\frac{(\bar n_{k,t+1}-\bar n_{k,t})^2}{v_n^2}
-+
-\frac{(\bar\xi_{k,t+1}-\bar\xi_{k,t})^2}{v_s^2}.
-$$ {#eq-pair-motion}
-
-The complete motion penalty is
-
-$$
-R_{\mathrm{motion}}(X)
-=
-\sum_k\sum_{t=0}^{T-2}w_{k,t}E_{k,t}^{\mathrm{motion}}.
-$$ {#eq-motion}
-
-# Within-frame spread regularization
-
-First moments cannot distinguish a compact coefficient from a mixture having the same barycenter. Define normalized coordinates
-
-$$
-q_{n,j}
-=
-\begin{bmatrix}
-n/v_n\\
-\log(s_j)/v_s
-\end{bmatrix}.
-$$ {#eq-normalized-coordinate}
-
-For a normalized frame distribution, let $\bar q=\sum_ip_iq_i$. The within-frame spread is
-
-$$
-V=\sum_ip_i\|q_i-\bar q\|_2^2
-=\mathbb E_p[\|q\|_2^2]-\|\mathbb E_p[q]\|_2^2.
-$$ {#eq-spread}
-
-The gated spread regularizer is
-
-$$
-R_{\mathrm{spread}}(X)=\sum_k\sum_tg(m_{k,t})V_{k,t}.
-$$ {#eq-spread-regularizer}
-
-A one-sparse active frame has essentially zero spread, whereas adjacent-scale mixtures have positive spread.
-
-# Complete temporal regularizer
-
-The proposed temporal penalty is
-
-$$
-\boxed{
-R_T(X)=R_{\mathrm{motion}}(X)+\beta_VR_{\mathrm{spread}}(X)
-}.
-$$ {#eq-complete-temporal}
-
-| Component | Role |
-|---|---|
-| $R_{\log}$ | Sparse frame cross-sections |
-| $R_{\mathrm{motion}}$ | Smooth trajectory centerlines |
-| $R_{\mathrm{spread}}$ | Suppression of barycentrically favorable mixtures |
-| $g(m)$ | Smooth track birth and death |
-
-# Gradient derivation
-
-## Normalization Jacobian
-
-For one frame, write
-
-$$
-p_i=\frac{x_i+\delta u_i}{m+\delta},
-\qquad m=\sum_ix_i.
 $$
 
-Then
+The activity gate is
 
 $$
-\frac{\partial p_i}{\partial x_\ell}
-=
-\frac{\delta_{i\ell}-p_i}{m+\delta}.
-$$ {#eq-normalization-jacobian}
-
-For a scalar function $F(p)$ with gradient $g_p=\nabla_pF$,
-
-$$
-\nabla_xF
-=
-\frac{g_p-\langle g_p,p\rangle\mathbf1}{m+\delta}.
-$$ {#eq-normalization-gradient}
-
-## Barycenter derivative
-
-For coordinate vector $c$ and barycenter $\bar c=\sum_ip_ic_i$,
-
-$$
-\nabla_x\bar c=\frac{c-\bar c\mathbf1}{m+\delta}.
-$$ {#eq-barycenter-gradient}
-
-## Motion derivative
-
-Let
-
-$$
-\Delta n=\bar n_{t+1}-\bar n_t,
-\qquad
-\Delta\xi=\bar\xi_{t+1}-\bar\xi_t.
+g(m)=\frac{m^2}{m^2+\mu^2},\qquad
+ g'(m)=\frac{2m\mu^2}{(m^2+\mu^2)^2},
 $$
 
-Then
+so $g(0)=g'(0)=0$.
 
-$$
-\frac{\partial E_t}{\partial\bar n_t}=-\frac{2\Delta n}{v_n^2},
-\qquad
-\frac{\partial E_t}{\partial\bar n_{t+1}}=\frac{2\Delta n}{v_n^2},
-$$
+The motion regularizer penalizes adjacent-frame barycenter displacement, while the within-frame spread term penalizes diffuse representations having similar first moments.
 
-with analogous expressions for log scale. Gate derivatives contribute because $w_t=g(m_t)g(m_{t+1})$.
-
-## Spread derivative
-
-Using the moment form of $V$,
-
-$$
-\frac{\partial V}{\partial p_i}=\|q_i\|_2^2-2q_i^T\bar q.
-$$ {#eq-spread-p-gradient}
-
-The gated derivative is
-
-$$
-\nabla_x[g(m)V]=g(m)\nabla_xV+Vg'(m)\mathbf1.
-$$ {#eq-gated-spread-gradient}
-
-# Numerical optimization
-
-## Coefficient ADMM
-
-The smooth update is
-
-$$
-X^{r+1}
-=
-\arg\min_{X\ge0}
-\left\{
-\frac12\|\mathcal AX-S\|_F^2
-+\lambda_TR_T(X)
-+\frac\rho2\|X-Y^r+U^r\|_F^2
-\right\},
-$$ {#eq-x-update}
-
-solved by L-BFGS-B. The sparse update is
-
-$$
-Y^{r+1}
-=
-\operatorname{prox}_{(\lambda_S/\rho)R_{\log}}(X^{r+1}+U^r),
-$$ {#eq-y-update}
-
-followed by
-
-$$
-U^{r+1}=U^r+X^{r+1}-Y^{r+1}.
-$$ {#eq-u-update}
-
-## Full-state continuation
-
-The complete problem is nonconvex. Continuation therefore propagates
-
-$$
-\boxed{(X,Y,U,\rho,a)}
-$$ {#eq-state}
-
-between nearby parameter values. Cold-start compatibility tests show that the stateful implementation reproduces the original solver exactly when no warm start is supplied.
-
-# Numerical validation
-
-Analytical gradients were checked by centered directional differences,
-
-$$
-d_{\mathrm{FD}}(h)=\frac{F(X+hD)-F(X-hD)}{2h},
-$$ {#eq-finite-difference}
-
-against $d_{\mathrm{an}}=\langle\nabla F(X),D\rangle$. Relative errors for the complete motion-plus-spread regularizer were observed near $10^{-11}$--$10^{-9}$ in the useful finite-difference regime.
-
-# Finite-duration benchmark
-
-A 12-frame benchmark uses activity
-
-$$
-[0,0,1,1,1,1,1,1,1,1,0,0],
-$$
-
-positions
-
-$$
-[28,29,30,31,32,33,34,35],
-$$
-
-and scale indices
-
-$$
-[0,1,2,3,3,2,1,0].
-$$
-
-Validated experiments recovered the exact activity interval with unit precision and recall, zero onset and offset error, and no interior gaps. Full-state continuation exposed an exact one-coefficient-per-active-frame branch that was obscured by independent cold starts.
-
-# Noise model and discrepancy principle
+# Noise model and parameter selection
 
 Noise is generated as
 
 $$
-N_i\overset{\mathrm{iid}}{\sim}\mathcal N(0,\sigma^2).
-$$ {#eq-noise-model}
-
-For requested SNR $\gamma$,
-
-$$
-\sigma^2
-=
-\frac{\|S_{\mathrm{clean}}\|_F^2}{N_{\mathrm{obs}}10^{\gamma/10}}.
-$$ {#eq-noise-variance}
-
-The selection target is expected noise energy,
-
-$$
-D_{\mathrm{exp}}=\frac12N_{\mathrm{obs}}\sigma^2,
-$$ {#eq-expected-discrepancy}
-
-and
-
-$$
-r_D(\theta)=\frac{D(X_\theta)}{D_{\mathrm{exp}}}.
-$$ {#eq-discrepancy-ratio}
-
-The realized noise energy is retained only for post-hoc diagnostics.
-
-Under the Gaussian model,
-
-$$
-\frac{\|N\|_F^2}{\sigma^2}\sim\chi^2_{N_{\mathrm{obs}}},
-$$ {#eq-chi-square}
-
-so the relative standard deviation of realized energy is $\sqrt{2/N_{\mathrm{obs}}}$.
-
-# Automatic parameter selection
-
-The parameters $\lambda_S$, $\lambda_T$, and $\beta_V$ are selected hierarchically.
-
-## Stage A: sparsity strength
-
-Set $\lambda_T=\beta_V=0$ and sweep $\lambda_S$. Record residual, log penalty, and support. Retain discrepancy-consistent candidates and form an L-curve in $(\log D,\log R_{\log})$.
-
-## Stage B: motion strength
-
-For retained sparsity candidates, increase $\lambda_T$ with full-state continuation. Record residual, motion energy, support, activity, and dominant trajectory.
-
-## Stage C: spread strength
-
-For retained $(\lambda_S,\lambda_T)$ pairs, continue over $\beta_V$. Identify regions in which mixed supports collapse while discrepancy and trajectory remain stable.
-
-## Stability selector
-
-Nearby feasible parameter points are grouped by stable support, activity, position path, and scale path. The selector chooses an interior point of the largest stable region.
-
-## L-curve selector
-
-For three consecutive tradeoff points $a,b,c\in\mathbb R^2$, discrete curvature is
-
-$$
-\kappa
-=
-\frac{2|\det(b-a,c-a)|}{\|b-a\|_2\|c-b\|_2\|c-a\|_2}.
-$$ {#eq-discrete-curvature}
-
-The maximal-curvature interior point determines the nested L-curve selection.
-
-# Single-realization adaptive result
-
-In a representative approximately 14 dB experiment, the stability and L-curve selectors agreed on
-
-$$
-\lambda_S=0.15,
-\qquad
-\lambda_T=3\times10^{-5},
-\qquad
-\beta_V=0.10.
-$$
-
-The selected reconstruction had eight significant coefficients, expected-noise discrepancy approximately $0.994$, exact trajectory recovery, and post-hoc coefficient error approximately $0.0254$. The searched synthetic oracle achieved coefficient error approximately $0.0196$.
-
-# Monte Carlo methodology
-
-For each requested SNR and trial:
-
-1. Generate a new independent Gaussian noise realization.
-2. Compute the expected-noise discrepancy target.
-3. Run all three selection stages from scratch.
-4. Apply the stability selector.
-5. Apply the L-curve selector.
-6. Reveal truth only for post-hoc assessment.
-7. Compute the searched synthetic oracle.
-
-The initial study uses
-
-$$
-\mathrm{SNR}\in\{20,17,14,11,8\}\ \mathrm{dB}
-$$
-
-with 10 trials per SNR. The original MATLAB study used 100 noise realizations per SNR; the present 10-trial study is a development-scale experiment that may later be expanded.
-
-Metrics include exact support and trajectory rates, activity F1, position and scale accuracy, coefficient-error median and interquartile range, selected-parameter distributions, selector agreement, and the oracle error ratio
-
-$$
-\rho_{\mathrm{oracle}}
-=
-\frac{E_X(\widehat\theta)}{E_X(\theta_{\mathrm{oracle}})}.
-$$ {#eq-oracle-ratio}
-
-# Scale-confusion diagnostic
-
-At a fixed position, each scale is fit with one nonnegative coefficient. For scale atom $d_{t,j}$,
-
-$$
-\widehat a_{t,j}
-=
-\max\left(0,\frac{\langle d_{t,j},S_t\rangle}{\|d_{t,j}\|_2^2}\right),
-$$ {#eq-single-scale-amplitude}
-
-and
-
-$$
-E_{t,j}=\frac12\|S_t-\widehat a_{t,j}d_{t,j}\|_2^2.
-$$ {#eq-single-scale-energy}
-
-The gap between the best and second-best energies quantifies local scale ambiguity.
-
-# Separation of coefficient and dictionary subproblems
-
-For fixed $D$, @eq-main defines coefficient recovery. For fixed $X$ and $\alpha$, define the linear dictionary operator
-
-$$
-(\mathcal B_{X,\alpha}D)_t
-=
-\sum_{k,j}(\alpha_{k,j}M_jd_k)*x_{k,j,t}.
-$$ {#eq-dictionary-operator}
-
-Because $X$ and $\alpha$ are fixed, $D\mapsto\mathcal B_{X,\alpha}D$ is linear. The coefficients $\alpha$ must not be differentiated implicitly through the dictionary update; they are recomputed separately after dictionary projection.
-
-# Paired evaluation of temporal regularization
-
-## Scientific question
-
-The principal ablation study compares the proposed temporal model with a sparsity-only estimator. The purpose is to determine whether barycentric motion and spread regularization improve recovery beyond what can be achieved by adaptive logarithmic sparsity alone.
-
-The comparison is paired: both estimators use the identical clean signal, SNR, Gaussian noise realization, forward operator, and coefficient initialization. Each estimator selects its own regularization parameters using observable quantities only.
-
-## Sparsity-only baseline
-
-The non-temporal estimator is
-
-$$
-\widehat X_0
-=
-\arg\min_{X\ge0}
-\left\{
-\frac12\|\mathcal A_DX-S\|_F^2
-+
-\lambda_SR_{\log}(X)
-\right\},
-$$ {#eq-nontemporal-estimator}
-
-with $\lambda_T=0$ and $\beta_V=0$. The parameter $\lambda_S$ is selected independently for each realization using the same Stage-A expected-discrepancy and L-curve information used by the full hierarchical selector.
-
-## Temporally regularized estimator
-
-The proposed estimator is
-
-$$
-\widehat X_T
-=
-\arg\min_{X\ge0}
-\left\{
-\frac12\|\mathcal A_DX-S\|_F^2
-+
-\lambda_SR_{\log}(X)
-+
-\lambda_T\left[R_{\mathrm{motion}}(X)+\beta_VR_{\mathrm{spread}}(X)\right]
-\right\}.
-$$ {#eq-temporal-estimator}
-
-The triple $(\lambda_S,\lambda_T,\beta_V)$ is selected independently for every realization by the established hierarchical stability or nested L-curve selector.
-
-## Fairness of the comparison
-
-The baseline is not evaluated with fixed or manually chosen parameters. It is adaptively tuned on every dataset, just as the temporal estimator is. Consequently, any observed difference reflects the temporal model and its automatic selection procedure rather than unequal tuning effort.
-
-The existing Stage-A candidates from each completed Monte Carlo trial are exactly the required non-temporal candidate set. Reusing them also guarantees that the comparison uses the same noise realization and avoids additional numerical variation.
-
-## Paired performance measures
-
-For trial $r$, define the coefficient-error improvement
-
-$$
-\Delta E_X^{(r)}
-=
-E_{X,0}^{(r)}-E_{X,T}^{(r)}.
-$$ {#eq-paired-xerr}
-
-Positive $\Delta E_X^{(r)}$ indicates improvement from temporal regularization. The scale-accuracy improvement is
-
-$$
-\Delta A_{\mathrm{scale}}^{(r)}
-=
-A_{\mathrm{scale},T}^{(r)}-A_{\mathrm{scale},0}^{(r)}.
-$$ {#eq-paired-scale}
-
-At each SNR, the analysis reports:
-
-- median coefficient error for both methods;
-- median paired coefficient-error improvement;
-- fraction of trials in which temporal regularization lowers coefficient error;
-- exact support and exact trajectory rates;
-- mean position and scale accuracy;
-- paired exact-recovery transitions.
-
-The exact-recovery transition table is
-
-| Baseline result | Temporal result | Interpretation |
-|---|---|---|
-| Incorrect | Incorrect | Neither method recovers the trajectory |
-| Incorrect | Exact | Temporal regularization fixes the baseline |
-| Exact | Incorrect | Temporal regularization breaks a correct baseline |
-| Exact | Exact | Both methods recover the trajectory |
-
-## Statistical analysis
-
-Coefficient errors are compared using a paired one-sided Wilcoxon signed-rank test with alternative hypothesis
-
-$$
-E_{X,T}<E_{X,0}.
-$$
-
-Exact-trajectory outcomes are compared using an exact one-sided McNemar test. The informative discordant counts are the number of trials that temporal regularization fixes and the number that it breaks.
-
-Because the development study contains only 10 trials per SNR, effect sizes, paired counts, and confidence intervals are emphasized over isolated $p$-values. The original MATLAB study used 100 realizations per SNR; the experiment can be enlarged if the development results justify a final publication-scale study.
-
-## Separating model benefit from parameter-selection benefit
-
-Synthetic oracle comparisons are retained for both candidate families. Let
-
-$$
-E_{X,0}^*
-=
-\min_{\lambda_S}E_X,
-$$
-
-and
-
-$$
-E_{X,T}^*
-=
-\min_{\lambda_S,\lambda_T,\beta_V}E_X.
-$$
-
-If $E_{X,T}^*<E_{X,0}^*$, the temporal model adds representational value independent of automatic selection. If the temporal oracle improves but the adaptive temporal selector does not, the limitation lies in parameter selection. If neither temporal estimator improves, the realization provides no evidence of temporal benefit within the searched candidate family.
-
-# Expected interpretation
-
-The temporal prior is expected to provide little visible benefit at very high SNR, where the data already distinguish the trajectory. Its strongest effect is expected in the transition regime, where individual frames contain ambiguous neighboring scales but the complete path remains temporally coherent. At very low SNR, temporal regularization may improve average scale accuracy without recovering every exact discrete scale.
-
-A scientifically useful result need not show exact recovery at all SNRs. The central claim is instead that temporal regularization extends the reliable-recovery regime, improves paired structural metrics, or reduces error relative to a fairly and independently tuned non-temporal estimator.
-
-# Paired-comparison results
-
-<!-- Replace this callout after paired_temporal_comparison.json has been generated. -->
-
-::: {.callout-note title="Result status"}
-The paired temporal-versus-nontemporal analysis is pending. Results will be inserted from `results/barycentric_monte_carlo/paired_temporal_comparison.json`.
-:::
-
-## Oracle comparison: model benefit independent of parameter selection
-
-To distinguish the intrinsic value of temporal regularization from the performance of the automatic parameter selectors, a second paired comparison was performed using synthetic coefficient error to select the best candidate within each model family.
-
-For the non\-temporal family,
-
-E\_\{X,0\}^\{\*\}
-
-=
-
-\\min\_\{\\lambda\_S\}
-
-E\_X(\\lambda\_S,\\lambda\_T=0).For the temporal family,
-
-E\_\{X,T\}^\{\*\}
-
-=
-
-\\min\_\{\\lambda\_S,\\lambda\_T,\\beta\_V\}
-
-E\_X(\\lambda\_S,\\lambda\_T,\\beta\_V).Because the temporal candidate family contains $\\lambda\_T=0$, it includes the non\-temporal model as a special case.
-
-The median oracle errors were:
-
-| SNR (dB) | Non\-temporal oracle | Temporal oracle |
-| --- | --- | --- |
-| 20 | 0.01261 | **0.00982** |
-| 17 | 0.01915 | **0.01396** |
-| 14 | 0.03263 | **0.02526** |
-| 11 | 0.49351 | **0.49326** |
-| 8 | 0.55932 | **0.49942** |
-
-Paired one\-sided Wilcoxon tests comparing coefficient error favored the temporal family with development\-scale (p)\-values of approximately 0.002, 0.016, 0.031, 0.063, and 0.031 at 20, 17, 14, 11, and 8 dB, respectively.
-
-The exact trajectory\-recovery probabilities of the two oracle families were identical at each tested SNR:
-
-[1.0,\\;0.9,\\;0.7,\\;0.2,\\;0.2].Thus the principal oracle\-level benefit of temporal regularization is not an increase in the number of trials crossing the exact\-trajectory threshold. Rather, temporal regularization frequently produces a more accurate coefficient representation within the same trajectory\-recovery class.
-
-At 20, 17, and 14 dB, the reduction in median coefficient error is substantial. At lower SNR, neighboring scale states become difficult to distinguish from the data and the improvement becomes more realization dependent.
-
-In several realizations, the temporal oracle selects $\\lambda\_T=0$, reverting naturally to the non\-temporal solution. This behavior is desirable: the extended model family can exploit temporal information when beneficial without requiring a nonzero temporal penalty for every dataset.
-
-Taken together with the automatic paired comparison, these results indicate two distinct advantages of the temporal model:
-
-1. **Model\-level benefit:** the enlarged temporal candidate family frequently provides lower coefficient error than the best non\-temporal candidate.
-2. **Structural benefit under automatic selection:** temporal regularization substantially improves recovery of the intended compact one\-coefficient\-per\-active\-frame support.
-
-The evidence therefore supports interpreting the temporal prior as a geometric structural constraint rather than merely as an additional denoising term.
-
-
-
-# Dictionary-learning extension
-
-## Dictionary ADMM update
-
-Introduce unconstrained dictionary $D$, constrained dictionary $G$, and scaled dual $H$. The dictionary update is
-
-$$
-D^{(\ell+1)}
-=
-\arg\min_D
-\left\{
-\frac12\|\mathcal B_{X,\alpha}D-S\|_F^2
-+
-\frac{\rho_D}{2}\|D-G^{(\ell)}+H^{(\ell)}\|_F^2
-\right\}.
-$$ {#eq-d-update}
-
-Its gradient is
-
-$$
-\nabla_DF
-=
-\mathcal B_{X,\alpha}^*(\mathcal B_{X,\alpha}D-S)
-+
-\rho_D(D-G+H),
-$$ {#eq-d-gradient}
-
-and its normal equation is
-
-$$
-(\mathcal B_{X,\alpha}^*\mathcal B_{X,\alpha}+\rho_DI)D
-=
-\mathcal B_{X,\alpha}^*S+\rho_D(G-H).
-$$ {#eq-d-normal}
-
-The system can be solved by CG or CGLS without forming the normal matrix.
-
-## Dictionary feasible set
-
-Each base atom satisfies
-
-$$
-\mathcal C_D
-=
-\{g_k:g_k\ge0,\ \|g_k\|_2=1,\ (I-Z_M)g_k=0\},
-$$ {#eq-d-feasible}
-
-where $Z_M$ enforces the allowed support. Projection consists of support restriction, nonnegative clipping, and normalization.
-
-The constrained update is
-
-$$
-G^{(\ell+1)}=P_{\mathcal C_D}(D^{(\ell+1)}+H^{(\ell)}).
-$$ {#eq-g-update}
-
-## Scale-normalization update
-
-After projection,
-
-$$
-\alpha_{k,j}^{(\ell+1)}
-=
-\frac1{\|M_jg_k^{(\ell+1)}\|_2},
-$$ {#eq-alpha-update}
-
-followed by
-
-$$
-H^{(\ell+1)}
-=
-H^{(\ell)}+D^{(\ell+1)}-G^{(\ell+1)}.
-$$ {#eq-h-update}
-
-The update order is
-
-$$
-D\longrightarrow G\longrightarrow\alpha\longrightarrow H.
-$$ {#eq-dictionary-update-order}
-
-## Dictionary validation results
-
-The dictionary-update implementation was validated incrementally before coupling it to coefficient estimation. Throughout these tests, the coefficient array \(X\) and scale-normalization factors \(\alpha\) were held fixed during each \(D\)-subproblem. Under these conditions, the dictionary forward map is linear in the base dictionary.
-
-For base atom \(d_k\) and scale \(j\),
-
-$$
-d_{k,j}
-=
-\alpha_{k,j}M_jd_k,
+N_i\overset{\mathrm{iid}}{\sim}\mathcal N(0,\sigma^2),
 $$
 
 with
 
 $$
-\alpha_{k,j}
-=
-\frac{1}{\|M_jg_k\|_2}.
+\sigma^2=\frac{\|S_{\mathrm{clean}}\|_F^2}{N_{\mathrm{obs}}10^{\gamma/10}}.
 $$
 
-The corresponding fixed-\(X\), fixed-\(\alpha\) dictionary operator is denoted by \(\mathcal B_{X,\alpha}\).
-
-### Forward linearity and adjoint
-
-The first validation confirmed
+The expected-noise discrepancy is
 
 $$
-\mathcal B_{X,\alpha}(aD_1+bD_2)
-=
-a\mathcal B_{X,\alpha}(D_1)
-+
-b\mathcal B_{X,\alpha}(D_2).
-$$
-
-The measured relative linearity error was
-
-$$
-2.81\times10^{-16}.
-$$
-
-The dictionary adjoint was then tested using
-
-$$
-\left\langle
-\mathcal B_{X,\alpha}D,R
-\right\rangle
-=
-\left\langle
-D,\mathcal B_{X,\alpha}^{*}R
-\right\rangle.
-$$
-
-The relative adjoint error was
-
-$$
-1.57\times10^{-14}.
-$$
-
-These tests jointly validate the multiscale resampling, scale normalization, zero padding, convolution, physical-domain cropping, channel ordering, and corresponding transpose operations used by the dictionary update.
-
-### Dictionary objective gradient
-
-For
-
-$$
-f(D)
-=
-\frac{1}{2}
-\left\|
-\mathcal B_{X,\alpha}D-S
-\right\|_F^2,
-$$
-
-the gradient is
-
-$$
-\nabla_D f(D)
-=
-\mathcal B_{X,\alpha}^{*}
-\left(
-\mathcal B_{X,\alpha}D-S
-\right).
-$$
-
-A centered finite-difference directional-derivative test was performed for perturbation sizes from \(10^{-2}\) through \(10^{-7}\). The best relative error was
-
-$$
-1.08\times10^{-13}.
-$$
-
-The increase in error at the smallest perturbations was consistent with floating-point cancellation. The test therefore independently confirms the dictionary objective gradient.
-
-### Normal operator and conjugate-gradient solve
-
-The ADMM \(D\)-subproblem requires solution of
-
-$$
-\left(
-\mathcal B_{X,\alpha}^{*}\mathcal B_{X,\alpha}
-+
-\sigma I
-\right)D
-=
-\mathcal B_{X,\alpha}^{*}S
-+
-\sigma(G-H).
-$$
-
-The matrix-free normal operator
-
-$$
-\mathcal N(D)
-=
-\mathcal B_{X,\alpha}^{*}\mathcal B_{X,\alpha}D
-+
-\sigma D
-$$
-
-was tested for symmetry and positive definiteness. The measured symmetry error was numerically zero.
-
-For a representative test with \(\sigma=0.7\),
-
-$$
-\langle D,\mathcal N(D)\rangle
-=
-5.9967\times10^3,
-$$
-
-while the theoretical lower bound
-
-$$
-\sigma\|D\|_F^2
-$$
-
-was \(1.0271\times10^1\).
-
-The resulting system was solved using matrix-free conjugate gradients. For a small problem in which the normal matrix could also be constructed explicitly, the CG solution agreed with a direct dense solve to relative error
-
-$$
-5.87\times10^{-13},
-$$
-
-with relative normal-equation residual
-
-$$
-1.86\times10^{-12}.
-$$
-
-This validates the Python equivalent of the MATLAB PCG dictionary solve while avoiding explicit construction of the normal matrix in the production algorithm.
-
-### Dictionary projection
-
-For the nonnegative-dictionary case, inspection of the MATLAB implementation showed that the \(G\)-subproblem applies nonnegativity, finite-support restriction, and per-atom unit-\(\ell_2\)-norm normalization.
-
-Since the Python base dictionary is represented directly on its finite \(M\)-sample support, the corresponding projection reduces to
-
-$$
-G_k
-=
-\frac{[D_{r,k}+H_k]_+}
-{\|[D_{r,k}+H_k]_+\|_2}
-$$
-
-for every nonzero projected atom.
-
-Tests confirmed nonnegativity and unit atom norms. An input whose nonnegative projection is identically zero is handled explicitly as a zero atom rather than allowing a division by zero to generate NaN values.
-
-### Scale-normalization update
-
-The MATLAB implementation recomputes scale normalization after the \(G\)-projection and before the dual update. For each atom and scale,
-
-$$
-n_{k,j}
-=
-\|M_jg_k\|_2,
+D_{\mathrm{exp}}=\frac12N_{\mathrm{obs}}\sigma^2,
 $$
 
 and
 
 $$
-\alpha_{k,j}
+r_D(\theta)=\frac{\frac12\|\mathcal A_DX-S\|_F^2}{D_{\mathrm{exp}}}.
+$$
+
+The established fixed-dictionary selector uses hierarchical $\lambda_S$, $\lambda_T$, and $\beta_V$ searches based on expected-noise discrepancy, tradeoff geometry, and solution stability. Synthetic truth is retained only for post-hoc oracle analysis.
+
+# Fixed-dictionary Monte Carlo milestone
+
+A development study used 10 independent realizations at each of
+
+$$
+\mathrm{SNR}\in\{20,17,14,11,8\}\ \mathrm{dB}.
+$$
+
+Under nested L-curve selection, exact position-scale trajectory recovery rates were
+
+$$
+[100,90,70,20,10]\%.
+$$
+
+The paired temporal-versus-nontemporal study showed that temporal regularization most consistently suppresses extraneous coefficients and stabilizes the intended compact trajectory representation. The searched temporal oracle also produced lower median coefficient error than the non-temporal oracle over most tested SNRs.
+
+# Dictionary-learning extension
+
+## Dictionary ADMM update
+
+For fixed $X$ and $\alpha$, define
+
+$$
+(\mathcal B_{X,\alpha}D)_t=\sum_{k,j}(\alpha_{k,j}M_jd_k)*x_{k,j,t}.
+$$
+
+The dictionary subproblem is
+
+$$
+D^{(\ell+1)}=\arg\min_D\left\{
+\frac12\|\mathcal B_{X,\alpha}D-S\|_F^2
++\frac{\rho_D}{2}\|D-G^{(\ell)}+H^{(\ell)}\|_F^2
+\right\},
+$$
+
+with normal equation
+
+$$
+(\mathcal B_{X,\alpha}^*\mathcal B_{X,\alpha}+\rho_DI)D
 =
-\frac{1}{n_{k,j}}.
+\mathcal B_{X,\alpha}^*S+\rho_D(G-H).
 $$
 
-Consequently,
+The projected update is
 
 $$
-\left\|
-\alpha_{k,j}M_jg_k
-\right\|_2
-=
-1.
+G_k=\frac{[D_{r,k}+H_k]_+}{\|[D_{r,k}+H_k]_+\|_2},
 $$
 
-The Python implementation verified this identity numerically to better than \(10^{-12}\).
+followed by recomputation of $\alpha$ and the scaled dual update.
 
-Thus two distinct normalizations are present in the dictionary update: the base atom \(g_k\) is constrained to unit norm by the \(G\)-projection, while every resampled atom \(M_jg_k\) is separately normalized through \(\alpha_{k,j}\).
+## Dictionary validation results
 
-### Known-\(X\) one-atom recovery
+The fixed-$X$, fixed-$\alpha$ dictionary forward operator was validated for linearity to relative error $2.81\times10^{-16}$ and for adjoint consistency to relative error $1.57\times10^{-14}$. The analytical dictionary objective gradient was validated by finite differences with best relative error approximately $1.08\times10^{-13}$.
 
-The validated components were next combined in a noiseless synthetic experiment with exact known coefficients. This isolates dictionary estimation from coefficient-estimation error.
+The matrix-free dictionary CG solution agreed with an explicitly assembled direct solve to relative error $5.87\times10^{-13}$, with relative normal-equation residual $1.86\times10^{-12}$. The nonnegative unit-norm projection and scale-normalization update were separately validated.
 
-The first experiment used one nonnegative base atom, three scales, and independently located sparse coefficient events. Recovery began from an unrelated feasible atom.
-
-After the first dictionary iteration, the recovered atom already had cosine similarity
-
-$$
-0.999876
-$$
-
-with the true atom. By iteration 10, the similarity was effectively
-
-$$
-1.00000000.
-$$
-
-After 100 iterations, the relative reconstruction residual was
-
-$$
-5.78\times10^{-7},
-$$
-
-and the final atom similarity was
-
-$$
-1.0000000000.
-$$
-
-The dictionary shape therefore converged substantially faster than the strict ADMM feasibility residual.
-
-### Known-\(X\) two-atom recovery
-
-A second experiment tested simultaneous recovery of two distinct nonnegative atoms. Exact known coefficients independently excited each atom across three scales and 12 observations.
-
-The true atoms had mutual cosine similarity of approximately
-
-$$
-0.607,
-$$
-
-so successful recovery required separation of substantially different dictionary shapes.
-
-After the first iteration, the minimum correct-channel cosine similarity was
-
-$$
-0.999425.
-$$
-
-By iteration 10 it had increased to approximately
-
-$$
-0.99999997.
-$$
-
-After 150 iterations, the relative reconstruction residual was
-
-$$
-5.83\times10^{-6},
-$$
-
-and the recovered-versus-true cosine-similarity matrix was approximately
+Known-$X$ noiseless experiments recovered one and two dictionary atoms essentially exactly. For the two-atom experiment, the final learned-versus-true similarity matrix was approximately
 
 $$
 \begin{bmatrix}
-1.000000 & 0.606691 \\
+1.000000 & 0.606691\\
 0.606690 & 1.000000
 \end{bmatrix}.
 $$
 
-Both dictionary atoms were therefore recovered essentially exactly in their coefficient-labelled channels.
+# Reference Gaussian/ramp problem
 
-### Current validation boundary
+The current alternating benchmark reproduces the synthetic `gaussian_ramp_overlap_sine2` configuration from the reference MATLAB workflow.
+
+The dimensions are
+
+$$
+N=80,\qquad M=41,\qquad T=80,\qquad K=2,\qquad J=10.
+$$
+
+The rational scale set is
+
+$$
+\mathcal S=\left\{
+\frac15,\frac14,\frac13,\frac25,\frac12,
+\frac35,\frac23,\frac34,\frac45,1
+\right\}.
+$$
+
+The true base atoms are a unit-$\ell_2$ Gaussian with width parameter $8$ and a unit-$\ell_2$ 30-sample linear ramp. Each atom is active exactly once in every frame, so
+
+$$
+\|X_{\mathrm{true}}\|_0=2T=160.
+$$
+
+## Flat initialization and ADMM settings
+
+The reference dictionary initialization uses centered nonnegative flat atoms of widths 21 and 41 samples with zero coefficient initialization. The non-temporal prefit sets $\lambda_T=0$.
+
+Both coefficient and dictionary blocks use over-relaxation
+
+$$
+\gamma_X=\gamma_D=1.8.
+$$
+
+Initial ADMM penalties are
+
+$$
+\rho_X^{(0)}=1000,\qquad \rho_D^{(0)}=500,
+$$
+
+with standard-residual adaptive updates every main iteration. For the coefficient block,
+
+$$
+r_X=\|X-Y\|_F,\qquad s_X=\rho_X\|Y-Y_{\mathrm{old}}\|_F,
+$$
+
+and for the dictionary block,
+
+$$
+r_D=\|D-G\|_F,\qquad s_D=\rho_D\|G-G_{\mathrm{old}}\|_F.
+$$
+
+A residual ratio threshold of 10 and multiplicative factor 2 are used, with inverse rescaling of the corresponding scaled dual variable whenever $\rho$ changes.
+
+## Padded Fourier coefficient update
+
+When $\lambda_T=0$, the reference implementation solves the quadratic coefficient subproblem directly in the padded Fourier domain. For one Fourier coordinate and frame,
+
+$$
+(\rho_XI+a^Ha)x=b,
+$$
+
+where
+
+$$
+b=a^HS_f+\rho_X\mathcal F(Y-U).
+$$
+
+The rank-one system is solved by Sherman--Morrison. The physical signal is pre-padded by $M-1$ zeros while each scaled dictionary filter is post-padded to
+
+$$
+L=N+M-1.
+$$
+
+The Python compatibility implementation reproduces this Fourier-domain algebra independently of the general coefficient solver.
+
+# Alternating Gaussian/ramp recovery
+
+## Diagnostic sparsity sweep
+
+Because the selected MATLAB parameter files were unavailable, $\lambda_S$ was treated as unresolved and investigated diagnostically using known dictionary truth.
+
+A coarse sweep gave:
+
+| $\lambda_S$ | Clean error | Gaussian cosine | Ramp cosine | Significant coefficients |
+|---:|---:|---:|---:|---:|
+| 0.15 | 0.1384 | 0.9910 | 0.8702 | 287 |
+| 0.20 | 0.1573 | 0.9903 | 0.8734 | 237 |
+| 0.25 | 0.1990 | 0.9910 | 0.8818 | 179 |
+| 0.30 | 0.2260 | 0.9842 | 0.8442 | 172 |
+| 0.35 | 0.2974 | 0.9884 | 0.7192 | 203 |
+| 0.40 | 0.3046 | 0.9793 | 0.6520 | 206 |
+
+A refined sweep gave:
+
+| $\lambda_S$ | Clean error | Gaussian cosine | Ramp cosine | Significant coefficients |
+|---:|---:|---:|---:|---:|
+| 0.22 | 0.1708 | 0.9905 | 0.8795 | 204 |
+| 0.23 | 0.1796 | 0.9902 | 0.8817 | 195 |
+| **0.24** | **0.1842** | **0.9904** | **0.8841** | **188** |
+| 0.25 | 0.1990 | 0.9910 | 0.8818 | 179 |
+| 0.26 | 0.2130 | 0.9910 | 0.8771 | 179 |
+| 0.27 | 0.2272 | 0.9897 | 0.8748 | 178 |
+| 0.28 | 0.2418 | 0.9879 | 0.8704 | 175 |
+
+Ramp recovery has a smooth local maximum near $\lambda_S=0.24$. This value is retained only as the current 20 dB **oracle-development reference**. It is not an automatic or deployable parameter-selection result.
+
+## 100-iteration flat-box prefit
+
+For $\lambda_S=0.24$, the 100-iteration prefit produced
+
+$$
+\cos(g_{\mathrm{Gaussian}},d_{\mathrm{Gaussian}})=0.99035,
+$$
+
+and
+
+$$
+\cos(g_{\mathrm{ramp}},d_{\mathrm{ramp}})=0.88409.
+$$
+
+The clean reconstruction error was $0.18417$ and 188 coefficients exceeded $10^{-3}$.
+
+The learned-versus-true cosine matrix was approximately
+
+$$
+\begin{bmatrix}
+0.99035 & 0.77965\\
+0.78754 & 0.88409
+\end{bmatrix}.
+$$
+
+## Continued non-temporal MCDL
+
+The learned dictionary and coefficients were used to initialize a second non-temporal MCDL stage. The sparse update remained in the logarithmic phase rather than restarting the initial 20-iteration $\ell_1$ warm-up.
+
+After 200 additional main iterations,
+
+$$
+\cos(g_{\mathrm{Gaussian}},d_{\mathrm{Gaussian}})=0.99243,
+$$
+
+and
+
+$$
+\cos(g_{\mathrm{ramp}},d_{\mathrm{ramp}})=0.88441.
+$$
+
+The clean reconstruction error improved to
+
+$$
+0.16709,
+$$
+
+and the number of significant coefficients decreased to
+
+$$
+158,
+$$
+
+compared with 160 in truth.
+
+The final similarity matrix was approximately
+
+$$
+\begin{bmatrix}
+0.99243 & 0.78351\\
+0.78415 & 0.88441
+\end{bmatrix}.
+$$
+
+Thus the second non-temporal stage improves reconstruction, Gaussian recovery, and sparse support recovery but does not materially sharpen the ramp beyond the prefit result. This is the current non-temporal learned-dictionary reference for evaluating temporal regularization.
+
+# Current validation boundary
 
 The following dictionary-learning components are now validated:
 
-1. fixed-\(X\), fixed-\(\alpha\) dictionary forward operator;
-2. dictionary adjoint;
-3. dictionary objective gradient;
-4. symmetric positive-definite normal operator;
-5. matrix-free conjugate-gradient solution of the \(D\)-subproblem;
-6. nonnegative finite-support unit-norm dictionary projection;
-7. post-projection recomputation of the multiscale normalization factors;
-8. noiseless known-\(X\) recovery of a single atom;
-9. noiseless known-\(X\) simultaneous recovery of two distinct atoms.
+1. fixed-$X$, fixed-$\alpha$ dictionary forward operator;
+2. dictionary adjoint and objective gradient;
+3. SPD normal operator and matrix-free CG solve;
+4. nonnegative finite-support unit-norm projection;
+5. post-projection multiscale normalization;
+6. noiseless known-$X$ one- and two-atom recovery;
+7. MATLAB-compatible flat initialization;
+8. reference Gaussian/ramp geometry and ten-scale grid;
+9. reference L1-to-log sparse schedule;
+10. adaptive coefficient and dictionary ADMM penalties;
+11. padded Fourier-domain coefficient update;
+12. controlled alternating coefficient/dictionary recovery on the 20 dB Gaussian/ramp problem.
 
-These results validate the dictionary-update side of the multiscale model when coefficient information is known exactly. They do not yet establish joint dictionary and coefficient recovery.
+Controlled joint coefficient/dictionary recovery is therefore validated for the reproduced 20 dB Gaussian/ramp benchmark. Validation of the complete temporally regularized learned-dictionary pipeline remains in progress.
 
-The next validation stage is therefore noiseless alternating \(X/D\) recovery, beginning with a single atom before extending to multiple atoms, noisy observations, and eventual reproduction of the original MATLAB single-Gaussian experiments.
+# Next development milestone
+
+The next phase is temporally regularized joint dictionary learning initialized from the validated Banco-style non-temporal prefit.
+
+The planned progression is:
+
+1. preserve the 20 dB Gaussian/ramp non-temporal result as a regression benchmark;
+2. initialize the softmin temporal-regularized solve from the learned dictionary and coefficient representation;
+3. determine an objective selection procedure for $\lambda_S$ and the temporal regularization parameter without using synthetic truth;
+4. compare temporal and non-temporal learned dictionaries on identical noise realizations;
+5. extend the validated workflow across SNR and independent noise realizations;
+6. proceed to publication-scale Monte Carlo experiments only after the complete learned-dictionary pipeline is stable.
+
+The current $\lambda_S=0.24$ is retained only as a 20 dB oracle-development reference.
 
 # Discussion
 
-The successful temporal model is geometric rather than pointwise. Barycentric motion supplies an efficient centerline prior; the spread term removes the first-moment degeneracy; the squared gate permits finite-duration support; and full-state continuation addresses branch selection in the nonconvex solver.
+The successful temporal coefficient model is geometric rather than pointwise. Barycentric motion supplies an efficient centerline prior; the spread term removes first-moment degeneracy; the squared gate permits finite-duration support; and full-state continuation addresses branch selection in the nonconvex solver.
 
-Parameter selection is treated as part of the estimator. Fixed parameters are insufficient for assessing performance across datasets with different noise realizations. The Monte Carlo study therefore repeats automatic selection independently for each realization and compares observable selectors with a post-hoc oracle.
+The dictionary-learning work follows the same validation philosophy: identify linear operators and adjoints, validate them numerically, then introduce CG and alternating optimization only after those foundations are sound. Direct comparison with the reference MATLAB implementation established the flat initialization, rational scale geometry, sparse schedule, resampling conventions, Fourier coefficient update, and adaptive ADMM rules used in the Gaussian/ramp benchmark.
 
-The dictionary-learning extension retains the same design philosophy: identify a linear operator and its adjoint, validate them numerically, then introduce CG and alternating optimization only after those foundations are sound.
+Parameter selection remains part of the estimator rather than an after-the-fact tuning step. The current $\lambda_S=0.24$ value was chosen with access to synthetic truth and is therefore useful only for development and oracle comparison. A deployable learned-dictionary estimator must select its regularization parameters using observable quantities such as discrepancy, tradeoff geometry, and stability.
 
 # Conclusions
 
-The proposed model combines logarithmic sparsity, barycentric trajectory motion, within-frame compactness, and smooth finite-duration gating. The formulation has explicit analytical gradients, avoids iterative transport subproblems, and supports reproducible automatic parameter selection.
+The proposed coefficient model combines logarithmic sparsity, barycentric trajectory motion, within-frame compactness, and smooth finite-duration gating. The formulation has explicit analytical gradients, avoids iterative transport subproblems, and supports reproducible automatic parameter selection.
 
-The fixed-coefficient dictionary-update phase is now validated, including the dictionary forward and adjoint operators, objective gradient, matrix-free CG solve, constrained dictionary projection, scale-normalization update, and noiseless one- and two-atom recovery with known coefficients. The next phase will couple these validated dictionary updates to the previously validated coefficient solver and study alternating \(X/D\) recovery, first under noiseless controlled conditions and subsequently with multiple atoms and noise.
+The dictionary-learning extension is now validated beyond the fixed-coefficient setting. The reference 20 dB Gaussian/ramp experiment has been reproduced with MATLAB-compatible flat initialization, multiscale geometry, sparse scheduling, relaxation, adaptive ADMM penalties, and padded Fourier coefficient updates. With an oracle-development value of $\lambda_S=0.24$, the continued non-temporal MCDL solve recovers 158 significant coefficients versus 160 in truth, with Gaussian and ramp cosine similarities of approximately $0.9924$ and $0.8844$.
+
+This stable non-temporal learned-dictionary result defines the baseline for the next phase: temporally regularized joint MCDL and objective regularization-parameter selection without access to synthetic truth.

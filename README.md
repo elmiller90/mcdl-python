@@ -61,12 +61,36 @@ During each dictionary \(D\)-update, \(X\) and \(\alpha\) are held fixed. The re
 
 ## Current validation status
 
-Two major parts of the algorithm have now been independently validated:
+Three major parts of the algorithm have now been independently validated:
 
 1. fixed-dictionary coefficient recovery;
-2. fixed-coefficient dictionary recovery.
+2. fixed-coefficient dictionary recovery;
+3. controlled alternating coefficient/dictionary recovery.
 
-The next development phase is their integration through alternating \(X/D\) optimization.
+The current dictionary-learning phase reproduces the Gaussian/ramp simulation and initialization workflow used in the reference MATLAB implementation.
+
+The reproduced 20 dB Gaussian/ramp problem uses
+
+\[
+N=80,\qquad
+M=41,\qquad
+T=80,\qquad
+K=2,\qquad
+J=10,
+\]
+
+with rational scales
+
+\[
+\left\{
+\frac15,\frac14,\frac13,\frac25,\frac12,
+\frac35,\frac23,\frac34,\frac45,1
+\right\}.
+\]
+
+The current non-temporal pipeline reproduces the flat-dictionary initialization, sparse-penalty schedule, relaxation parameters, adaptive ADMM penalties, and padded Fourier-domain coefficient update used by the MATLAB workflow.
+
+The immediate next phase is temporally regularized dictionary learning initialized from this validated non-temporal MCDL prefit.
 
 ## Validated coefficient-recovery components
 
@@ -94,6 +118,15 @@ The coefficient solver includes:
 - nonnegative L-BFGS-B coefficient updates;
 - adaptive ADMM penalty control.
 
+The Banco-compatible dictionary-learning path additionally implements the reference MATLAB sparse schedule:
+
+- 20 initial iterations of nonnegative \(\ell_1\) shrinkage;
+- subsequent logarithmic shrinkage;
+- fixed log parameter
+  \[
+  a=\frac{0.95}{\lambda_S}.
+  \]
+
 ### Temporal regularization
 
 The validated temporal model includes:
@@ -111,7 +144,7 @@ The validated temporal model includes:
 
 ### Nonconvex continuation
 
-The solver supports full-state continuation of
+The coefficient solver supports full-state continuation of
 
 \[
 (X,Y,U,\rho,a)
@@ -409,7 +442,7 @@ H.
 
 ## Validated dictionary-learning components
 
-The fixed-\(X\) dictionary-update path has now been validated incrementally.
+The fixed-\(X\) dictionary-update path has been validated incrementally.
 
 ### Dictionary forward operator and adjoint
 
@@ -562,6 +595,97 @@ After 150 dictionary iterations:
 
 These experiments establish accurate one- and two-atom dictionary recovery when coefficient information is exact.
 
+## Banco Gaussian/ramp alternating-recovery milestone
+
+The Python implementation now reproduces the principal components of the MATLAB Gaussian/ramp MCDL initialization workflow.
+
+The exact simulation uses a unit-normalized Gaussian and 30-sample normalized ramp over 80 frames. Both atoms are active once per frame, giving
+
+\[
+\|X_{\mathrm{true}}\|_0=160.
+\]
+
+The reproduced initialization includes:
+
+- zero coefficient initialization;
+- centered flat dictionary atoms of widths 21 and 41;
+- the exact 10-scale rational grid;
+- 20 initial iterations of nonnegative \(\ell_1\) shrinkage followed by logarithmic shrinkage;
+- fixed log parameter
+  \[
+  a=0.95/\lambda_S;
+  \]
+- coefficient and dictionary over-relaxation parameters of 1.8;
+- initial ADMM penalties
+  \[
+  \rho_X=1000,\qquad\rho_D=500;
+  \]
+- standard-residual adaptive penalty balancing at each main iteration;
+- padded Fourier-domain rank-one coefficient solves corresponding to the MATLAB `solvedbi_sm` pathway.
+
+The multirate resampling implementation was compared directly with the MATLAB `lowpassM`, `uSampleCenter`, `dSampleCenter`, `reSampleCustomArrayCenter3`, and transpose formulations. The triangular interpolation kernel, 2-norm normalization, centered rational resampling, shifts, and scale-normalization conventions agree with the reference formulation.
+
+### Diagnostic \(\lambda_S\) sweep at 20 dB
+
+A focused oracle-development sweep used
+
+\[
+\lambda_S
+\in
+\{0.15,0.20,0.22,0.23,0.24,0.25,0.26,0.27,0.28,0.30,0.35,0.40\}.
+\]
+
+The best local ramp recovery occurred near
+
+\[
+\lambda_S=0.24.
+\]
+
+This value is an **oracle development choice**, selected using known dictionary truth. It is not yet an objective or deployable parameter-selection result.
+
+For the 100-iteration flat-box prefit at
+
+\[
+\lambda_S=0.24,
+\]
+
+the final results were:
+
+- clean reconstruction error: \(0.18417\);
+- Gaussian cosine similarity: \(0.99035\);
+- ramp cosine similarity: \(0.88409\);
+- significant coefficients: 188.
+
+The true coefficient tensor contains 160 nonzeros.
+
+### Continued non-temporal MCDL
+
+The learned dictionary and coefficient variable were then used to initialize a continued non-temporal MCDL solve. The sparse penalty remained in the logarithmic phase rather than restarting the initial \(\ell_1\) schedule.
+
+After 200 additional iterations:
+
+- clean reconstruction error was
+  \[
+  0.16709;
+  \]
+- Gaussian cosine similarity was
+  \[
+  0.99243;
+  \]
+- ramp cosine similarity was
+  \[
+  0.88441;
+  \]
+- the number of significant coefficients was
+  \[
+  158,
+  \]
+  compared with 160 in truth.
+
+The second non-temporal stage therefore improves reconstruction, Gaussian recovery, and support recovery, but does not materially sharpen the ramp beyond the prefit result.
+
+The final coefficient support is very close to truth, and the dictionary updates are small by the end of the continued solve. This provides a stable non-temporal learned-dictionary reference before temporal regularization is introduced.
+
 ## Current validation boundary
 
 The following are now considered validated:
@@ -590,22 +714,38 @@ The following are now considered validated:
 - nonnegative finite-support unit-norm projection;
 - explicit scale-normalization update;
 - noiseless known-\(X\) one-atom recovery;
-- noiseless known-\(X\) two-atom recovery.
+- noiseless known-\(X\) two-atom recovery;
+- exact Gaussian/ramp simulation geometry;
+- MATLAB-compatible flat initialization;
+- Banco-compatible sparse-penalty schedule;
+- adaptive coefficient and dictionary ADMM penalties;
+- padded Fourier-domain coefficient update;
+- controlled joint Gaussian/ramp coefficient/dictionary recovery at 20 dB.
 
-Joint coefficient/dictionary recovery has **not yet been validated**.
+Controlled joint coefficient/dictionary recovery is therefore now validated for the reproduced 20 dB Gaussian/ramp problem.
+
+Validation of the complete temporally regularized learned-dictionary pipeline remains in progress.
 
 ## Next development milestone
 
-The next phase is alternating coefficient and dictionary estimation.
+The next phase is temporally regularized joint dictionary learning initialized from the validated Banco-style non-temporal prefit.
 
 The planned progression is:
 
-1. noiseless alternating \(X/D\) recovery with one atom;
-2. noiseless alternating \(X/D\) recovery with multiple atoms;
-3. controlled noisy alternating recovery;
-4. temporal-versus-nontemporal comparison with learned dictionaries;
-5. reproduction of the original MATLAB single-Gaussian experiments;
-6. publication-scale Monte Carlo studies after the complete pipeline is stable.
+1. preserve the validated 20 dB Gaussian/ramp non-temporal result as a regression benchmark;
+2. initialize the softmin temporal-regularized solve from the learned dictionary and coefficient representation;
+3. determine an objective selection procedure for \(\lambda_S\) and the temporal regularization parameter without using synthetic truth;
+4. compare temporal and non-temporal learned dictionaries on identical noise realizations;
+5. extend the validated workflow across SNR and independent noise realizations;
+6. proceed to publication-scale Monte Carlo experiments only after the complete learned-dictionary pipeline is stable.
+
+The current
+
+\[
+\lambda_S=0.24
+\]
+
+value is retained only as a 20 dB oracle-development reference and must not be presented as an unsupervised selected parameter.
 
 Previously validated coefficient and dictionary components should remain unchanged unless an integration test identifies a specific inconsistency.
 
@@ -629,6 +769,14 @@ The project root contains the active numerical implementation:
 - `dictionary_cg.py`: matrix-free CG dictionary \(D\)-solve
 - `dictionary_projection.py`: nonnegative unit-norm base-dictionary projection
 - `dictionary_alpha.py`: scale-dependent normalization-factor update
+- `dictionary_initialization.py`: MATLAB-compatible flat-dictionary initialization
+- `banco_gaussian_ramp.py`: reference Gaussian/ramp geometry and 10-scale grid
+- `banco_sparse_penalty.py`: MATLAB-compatible \(\ell_1\)-to-log sparse schedule
+- `banco_rho_update.py`: reference residual-balancing ADMM penalty update
+- `banco_solvedbi_sm.py`: rank-one Sherman-Morrison Fourier solve
+- `banco_coefficient_fourier.py`: padded Fourier-domain coefficient update
+- `banco_coefficient_step.py`: Banco-compatible coefficient ADMM step
+- `coefficient_quadratic_cg.py`: independently validated physical-domain quadratic coefficient solve used for comparison
 
 ### Tests
 
@@ -645,6 +793,14 @@ The project root contains the active numerical implementation:
 - dictionary normal operator and CG solve;
 - dictionary projection;
 - scale-normalization updates;
+- Banco flat initialization;
+- Banco Gaussian/ramp simulation geometry;
+- Banco sparse-penalty switching;
+- Banco adaptive-\(\rho\) update;
+- rank-one Fourier Sherman-Morrison solve;
+- padded Fourier coefficient update;
+- Banco coefficient-step composition;
+- physical-domain quadratic coefficient CG;
 - historical softmin, Sinkhorn, and transition formulations.
 
 Some historical tests correspond to archived experimental implementations and are not part of the current core regression suite.
@@ -663,7 +819,15 @@ Some historical tests correspond to archived experimental implementations and ar
 
 `experiments/diagnostics/` contains scale-confusion and comparative diagnostics.
 
-`experiments/dictionary_learning/` contains the controlled known-\(X\) dictionary-recovery experiments and will contain the alternating \(X/D\) experiments.
+`experiments/dictionary_learning/` contains known-\(X\), alternating, and Banco-reproduction experiments, including:
+
+- `known_x_one_atom`
+- `known_x_two_atom`
+- `banco_exact_prefit_20db`
+- `banco_lambda_s_sweep`
+- `banco_prefit_then_mcdl_20db`
+
+The known-\(X\) experiments remain regression-quality development benchmarks. Banco-style alternating experiments are maintained separately so that integration work does not alter the validated component tests.
 
 ### Archived approaches
 
@@ -727,12 +891,24 @@ Long Monte Carlo studies save per-trial summaries and can skip completed trials 
 
 Known-\(X\) dictionary experiments are run from the repository root as Python modules.
 
-The current validated experiments are:
+Regression benchmarks include:
 
 - `experiments.dictionary_learning.known_x_one_atom`
 - `experiments.dictionary_learning.known_x_two_atom`
 
-These experiments should remain unchanged as regression-quality development benchmarks while alternating \(X/D\) recovery is introduced separately.
+Banco Gaussian/ramp experiments include:
+
+- `experiments.dictionary_learning.banco_exact_prefit_20db`
+- `experiments.dictionary_learning.banco_lambda_s_sweep`
+- `experiments.dictionary_learning.banco_prefit_then_mcdl_20db`
+
+The current 20 dB oracle-development reference uses
+
+\[
+\lambda_S=0.24.
+\]
+
+Generated numerical results should be stored under `results/` rather than committed as source files.
 
 ## Development policy
 
