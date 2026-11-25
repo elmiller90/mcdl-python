@@ -9,7 +9,7 @@ from gaussian_experiment import add_noise_snr
 from log_admm_stateful_compat import solve_log_admm_stateful
 from multiscale_convolution import MultiscaleConvolutionOperator
 from experiments.dictionary_learning.alternating_two_atom_log_noisy import (
-    relerr, cosine, similarity_matrix, make_dictionary, make_coefficients,
+    relerr, cosine, similarity_matrix, make_dictionary,
 )
 
 
@@ -21,6 +21,23 @@ def best_match(C):
         return "direct", C[0, 0], C[1, 1]
 
     return "swapped", C[0, 1], C[1, 0]
+
+def make_coefficients(L, M, T):
+    X = np.zeros((L, 2, 3, T), dtype=float)
+
+    p0 = np.rint(np.linspace(20, 38, T)).astype(int)
+    p1 = np.rint(np.linspace(65, 47, T)).astype(int)
+
+    cycle = np.array([0, 0, 1, 1, 2, 2, 1, 1])
+    j0 = np.resize(cycle, T)
+    j1 = np.resize(cycle[::-1], T)
+
+    for t in range(T):
+        X[(M-1)+p0[t], 0, j0[t], t] = 1.0
+        X[(M-1)+p1[t], 1, j1[t], t] = 1.0
+
+    return X
+
 
 def main():
     M, N, K, T, center = 41, 96, 2, 40, 21
@@ -49,8 +66,9 @@ def main():
     Y = np.zeros(shape, dtype=float)
     state = None
 
-    lambda_s = 0.5
+    lambda_s = 0.1
     rho_x, rho_d = 0.1, 1.0
+    x_relax, d_relax = 1.8, 1.8
     outer_maxiter = 100
 
     print("Banco-style coupled 20 dB prefit")
@@ -81,9 +99,9 @@ def main():
                 raise RuntimeError(
                     f"Dictionary CG failed: {cginfo}"
                 )
-
-            Gnew = project_dictionary_nonnegative(D + H)
-            H = H + D - Gnew
+            Dr = d_relax*D + (1.0-d_relax)*G
+            Gnew = project_dictionary_nonnegative(Dr + H)
+            H = H + Dr - Gnew
             dchange = np.linalg.norm(Gnew - G)
             G = Gnew
         else:
@@ -97,13 +115,13 @@ def main():
         _, Y, _, info = solve_log_admm_stateful(
             X0=Xstart, S=S, operator=A,
             lambda_s=lambda_s, lambda2=0.0, tau=1e-2,
-            rho=rho_x, max_admm_iter=1, x_maxiter=50,
-            abs_tol=1e-4, rel_tol=1e-3,
-            adaptive_rho=True, rho_mu=10.0, rho_tau=2.0,
-            a_min=1e-4, continuation_iters=100,
-            a_fraction=0.95, verbose=False,
-            temporal_regularizer=None,
+            rho=rho_x, max_admm_iter=1, x_maxiter=50, 
+            abs_tol=1e-4, rel_tol=1e-3, adaptive_rho=True,
+            rho_mu=10.0, rho_tau=2.0, a_min=1e-4,
+            continuation_iters=100, a_fraction=0.95,
+            verbose=False, temporal_regularizer=None,
             state0=state, continue_iteration=True,
+            x_relax=x_relax,
         )
 
         state = info["state"]

@@ -54,6 +54,7 @@ def main():
 
     X1, Y1, U1, i1 = solve_original(**kwargs)
     X2, Y2, U2, i2 = solve_log_admm_stateful(**kwargs)
+    X3, Y3, U3, i3 = solve_log_admm_stateful(**kwargs, x_relax=1.0)
 
     def relerr(a, b):
         return np.linalg.norm(a - b) / max(np.linalg.norm(a), 1e-12)
@@ -70,6 +71,14 @@ def main():
     assert np.allclose(X1, X2, rtol=1e-11, atol=1e-12)
     assert np.allclose(Y1, Y2, rtol=1e-11, atol=1e-12)
     assert np.allclose(U1, U2, rtol=1e-11, atol=1e-12)
+    assert np.allclose(X2, X3, rtol=1e-12, atol=1e-13)
+    assert np.allclose(Y2, Y3, rtol=1e-12, atol=1e-13)
+    assert np.allclose(U2, U3, rtol=1e-12, atol=1e-13)
+    assert i2["iterations"] == i3["iterations"]
+    assert np.isclose(i2["rho"], i3["rho"])
+    assert np.isclose(i2["a"], i3["a"])
+
+    print("x_relax=1 compatibility: PASS")
     assert i1["iterations"] == i2["iterations"]
     assert np.isclose(i1["rho"], i2["rho"])
     assert np.isclose(i1["a"], i2["a"])

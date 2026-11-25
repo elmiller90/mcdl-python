@@ -82,8 +82,7 @@ def solve_log_admm_stateful(
     rho_mu=10.0, rho_tau=2.0, a_min=1e-4,
     continuation_iters=100, a_fraction=0.95, verbose=True,
     temporal_regularizer=None, state0=None,
-    continue_iteration=False,
-):
+    continue_iteration=False, x_relax=1.0,):
     """Compatibility ADMM solver with optional full-state warm start.
 
     With state0=None this follows the original solver initialization exactly.
@@ -141,9 +140,10 @@ def solve_log_admm_stateful(
             continuation_iteration, lambda_s, a_min,
             continuation_iters, a_fraction,
         )
-        Y = log_threshold_nonnegative(X + U, lambda_s / rho, a)
+        Xr = x_relax*X + (1.0-x_relax)*Y
+        Y = log_threshold_nonnegative(Xr + U, lambda_s / rho, a)
 
-        primal_array = X - Y
+        primal_array = Xr - Y
         U += primal_array
         primal = np.linalg.norm(primal_array)
         dual = rho * np.linalg.norm(Y - Y_old)
