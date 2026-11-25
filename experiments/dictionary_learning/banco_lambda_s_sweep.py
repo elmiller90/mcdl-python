@@ -210,16 +210,11 @@ def run_candidate(
         )
 
         X, Y, U, _ = banco_coefficient_step(
-            X,
-            Y,
-            U,
-            S,
-            A,
+            X, Y, U, S, A,
             lambda_s=lambda_s,
             rho=rho_x,
             iteration=it,
             x_relax=x_relax,
-            x_maxiter=50,
         )
 
         rx = float(np.linalg.norm(X - Y))
